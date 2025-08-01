@@ -49,8 +49,10 @@ def transacting_powers(accounts, cohort_ursulas):
 
 
 @pytest.fixture(scope="module")
-def incoming_validator(staking_providers):
-    return staking_providers[3]
+def incoming_validator(staking_providers, cohort):
+    return staking_providers[
+        len(cohort) + 1
+    ]  # deployer + cohort ursulas already assigned
 
 
 @pytest.fixture(scope="module")
