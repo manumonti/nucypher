@@ -341,7 +341,7 @@ class RitualisticPower(KeyPairBasedPower):
         ritual_id: int,
         shares: int,
         threshold: int,
-        nodes: list,
+        nodes: List[Validator],
     ) -> Transcript:
         transcript = dkg.generate_transcript(
             ritual_id=ritual_id,
