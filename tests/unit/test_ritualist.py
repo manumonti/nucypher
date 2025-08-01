@@ -6,6 +6,7 @@ from atxm.exceptions import Fault, InsufficientFunds
 
 from nucypher.blockchain.eth.agents import CoordinatorAgent
 from nucypher.blockchain.eth.models import (
+    HANDOVER_AWAITING_BLINDED_SHARE,
     HANDOVER_AWAITING_TRANSCRIPT,
     PHASE1,
     PHASE2,
@@ -674,3 +675,92 @@ def test_perform_handover_transcript_phase(
         )
         is async_tx2
     )
+
+
+def test_perform_handover_blinded_share_phase(
+    ursula,
+    handover_incoming_ursula,
+    cohort,
+    agent,
+):
+    init_timestamp = 123456
+    handover = Coordinator.Handover(
+        key=bytes(os.urandom(32)),
+        departing_validator=ursula.checksum_address,
+        incoming_validator=handover_incoming_ursula.checksum_address,
+        init_timestamp=init_timestamp,
+        blinded_share=b"",
+        transcript=bytes(os.urandom(32)),
+        decryption_request_pubkey=bytes(os.urandom(32)),
+    )
+    agent.get_handover = lambda *args, **kwargs: handover
+
+    # ensure no operation performed when ritual is not active
+    no_handover_dkg_states = [
+        Coordinator.RitualStatus.NON_INITIATED,
+        Coordinator.RitualStatus.DKG_AWAITING_TRANSCRIPTS,
+        Coordinator.RitualStatus.DKG_AWAITING_AGGREGATIONS,
+        Coordinator.RitualStatus.EXPIRED,
+        Coordinator.RitualStatus.DKG_TIMEOUT,
+        Coordinator.RitualStatus.DKG_INVALID,
+    ]
+    for dkg_state in no_handover_dkg_states:
+        agent.get_ritual_status = lambda *args, **kwargs: dkg_state
+        assert not ursula._is_handover_blinded_share_required(ritual_id=0)
+        async_tx = ursula.perform_handover_blinded_share_phase(ritual_id=0)
+        assert async_tx is None  # no execution performed
+
+    # ensure ritual is active
+    agent.get_ritual_status = lambda *args, **kwargs: Coordinator.RitualStatus.ACTIVE
+
+    # ensure no operation performed when ritual is active but
+    # handover status is not awaiting blinding share
+    agent.get_ritual_status = lambda *args, **kwargs: Coordinator.RitualStatus.ACTIVE
+    no_handover_transcript_states = [
+        Coordinator.HandoverStatus.NON_INITIATED,
+        Coordinator.HandoverStatus.HANDOVER_AWAITING_TRANSCRIPT,
+        Coordinator.HandoverStatus.HANDOVER_AWAITING_FINALIZATION,
+        Coordinator.HandoverStatus.HANDOVER_TIMEOUT,
+    ]
+    for handover_state in no_handover_transcript_states:
+        agent.get_handover_status = lambda *args, **kwargs: handover_state
+        assert not ursula._is_handover_blinded_share_required(ritual_id=0)
+        async_tx = ursula.perform_handover_blinded_share_phase(ritual_id=0)
+        assert async_tx is None  # no execution performed
+
+    # set correct state
+    agent.get_handover_status = (
+        lambda *args, **kwargs: Coordinator.HandoverStatus.HANDOVER_AWAITING_BLINDED_SHARE
+    )
+    assert ursula._is_handover_blinded_share_required(ritual_id=0)
+
+    # cryptographic issue does not raise exception
+    with patch(
+        "nucypher.crypto.ferveo.dkg.finalize_handover",
+        side_effect=Exception("blinded share cryptography failed"),
+    ):
+        async_tx = ursula.perform_handover_blinded_share_phase(ritual_id=0)
+        # exception not raised, but None returned
+        assert async_tx is None
+
+    phase_id = PhaseId(ritual_id=0, phase=HANDOVER_AWAITING_BLINDED_SHARE)
+    assert (
+        ursula.dkg_storage.get_ritual_phase_async_tx(phase_id=phase_id) is None
+    ), "no tx data as yet"
+
+    # mock the blinded share production
+    ursula._produce_blinded_share_for_handover = lambda *args, **kwargs: bytes(
+        os.urandom(32)
+    )
+
+    # let's perform the handover blinded share phase
+    async_tx = ursula.perform_handover_blinded_share_phase(ritual_id=0)
+
+    # ensure tx is tracked
+    assert async_tx
+    assert ursula.dkg_storage.get_ritual_phase_async_tx(phase_id=phase_id) is async_tx
+
+    # try again
+    async_tx2 = ursula.perform_handover_blinded_share_phase(ritual_id=0)
+    assert async_tx2 is async_tx
+    assert ursula.dkg_storage.get_ritual_phase_async_tx(phase_id=phase_id) is async_tx2
