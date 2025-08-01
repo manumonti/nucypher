@@ -153,7 +153,8 @@ def incoming_validator(ursulas, dkg_size, clock):
 
 @pytest.fixture(scope="module")
 def departing_validator(cohort):
-    return cohort[0]
+    # randomize departing validator from the cohort
+    return cohort[random.randint(0, len(cohort) - 1)]
 
 
 def test_dkg_initiation(

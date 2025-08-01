@@ -1,4 +1,5 @@
 import os
+import random
 
 import pytest
 import pytest_twisted
@@ -54,7 +55,8 @@ def incoming_validator(staking_providers):
 
 @pytest.fixture(scope="module")
 def departing_validator(cohort):
-    return cohort[0]
+    # randomize departing validator from the cohort
+    return cohort[random.randint(0, len(cohort) - 1)]
 
 
 def test_coordinator_properties(agent):
@@ -473,6 +475,7 @@ def test_finalize_handover(
     incoming_validator,
     departing_validator,
     supervisor_transacting_power,
+    cohort,
 ):
     ritual_id = agent.number_of_rituals() - 1
     ritual = agent.get_ritual(ritual_id)
@@ -523,7 +526,7 @@ def test_finalize_handover(
     new_aggregated_transcript = ritual.aggregated_transcript
     assert new_aggregated_transcript != old_aggregated_transcript
 
-    index = 0
+    index = cohort.index(departing_validator)
     threshold = 2
     blind_share_position = 32 + index * 96 + threshold * 48
 
