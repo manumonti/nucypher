@@ -502,8 +502,31 @@ def test_decryption_after_handover(
     ritual_id,
     cohort,
     plaintext,
+    departing_validator,
+    incoming_validator,
 ):
     print("==================== DKG DECRYPTION POST-HANDOVER ====================")
+
+    departing_validator_spy = mocker.spy(
+        departing_validator, "handle_threshold_decryption_request"
+    )
+    incoming_validator_spy = mocker.spy(
+        incoming_validator, "handle_threshold_decryption_request"
+    )
+    # ensure that the incoming validator handled the request;
+    # the ritual is 3/4 so we need 1 ursula in the cohort to fail to decrypt
+    # to ensure that the incoming validator is actually used
+    node_to_fail = None
+    for u in cohort:
+        if u.checksum_address != departing_validator.checksum_address:
+            node_to_fail = u
+            break
+    assert node_to_fail is not None
+    mocker.patch.object(
+        node_to_fail,
+        "handle_threshold_decryption_request",
+        side_effect=ValueError("forcibly failed"),
+    )
 
     # ritual_id, ciphertext, conditions are obtained from the side channel
     bob.start_learning_loop(now=True)
@@ -512,8 +535,10 @@ def test_decryption_after_handover(
     )
     assert bytes(cleartext) == plaintext.encode()
 
-    # TODO: Somehow assert that the decryption was done by the incoming validator
-    # I've seen it in the logs, but not sure how to assert it here
+    # ensure that the departing validator did not handle the request
+    assert departing_validator_spy.call_count == 0
+    # ensure that the incoming validator handled the request
+    assert incoming_validator_spy.call_count == 1
 
     num_successes = REGISTRY.get_sample_value(
         "threshold_decryption_num_successes_total"
