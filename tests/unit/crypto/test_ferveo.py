@@ -12,6 +12,7 @@ from nucypher_core.ferveo import (
 
 SHARES_NUM = 4
 
+
 # This test is a mirror of the handover python test in ferveo
 @pytest.mark.parametrize("handover_slot_index", list(range(SHARES_NUM)))
 def test_handover_with_encrypt_and_decrypt(

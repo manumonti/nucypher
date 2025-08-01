@@ -17,6 +17,8 @@ from tests.constants import MOCK_ETH_PROVIDER_URI
 from tests.mock.coordinator import MockCoordinatorAgent
 from tests.mock.interfaces import MockBlockchain
 
+DKG_SIZE = 4
+
 
 @pytest.fixture(scope="module")
 def agent(mock_contract_agency, ursulas) -> MockCoordinatorAgent:
@@ -47,7 +49,7 @@ def ursula(ursulas):
 
 @pytest.fixture(scope="module")
 def cohort(ursulas):
-    return [u.staking_provider_address for u in ursulas[:4]]
+    return [u.staking_provider_address for u in ursulas[:DKG_SIZE]]
 
 
 @pytest.fixture(scope="module")
@@ -88,8 +90,8 @@ def test_initiate_ritual(
         initiator=transacting_power.account,
         authority=transacting_power.account,
         access_controller=global_allow_list,
-        dkg_size=4,
-        threshold=MockCoordinatorAgent.get_threshold_for_ritual_size(dkg_size=4),
+        dkg_size=DKG_SIZE,
+        threshold=MockCoordinatorAgent.get_threshold_for_ritual_size(dkg_size=DKG_SIZE),
         init_timestamp=123456,
         end_timestamp=end_timestamp,
         participants=participants,
@@ -121,11 +123,11 @@ def test_perform_round_1(
         initiator=random_address,
         authority=random_address,
         access_controller=get_random_checksum_address(),
-        dkg_size=4,
-        threshold=MockCoordinatorAgent.get_threshold_for_ritual_size(dkg_size=4),
+        dkg_size=DKG_SIZE,
+        threshold=MockCoordinatorAgent.get_threshold_for_ritual_size(dkg_size=DKG_SIZE),
         init_timestamp=init_timestamp,
         end_timestamp=end_timestamp,
-        total_transcripts=4,
+        total_transcripts=DKG_SIZE,
         participants=list(participants.values()),
         fee_model=get_random_checksum_address(),
     )
