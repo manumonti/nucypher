@@ -18,3 +18,13 @@ def test_derive_ritualistic_power(tmpdir):
 
     public_key = power.public_key()
     assert isinstance(public_key, FerveoPublicKey)
+
+    # Generate keypair with different randomness
+    keypair2 = RitualisticKeypair.from_secure_randomness(os.urandom(size))
+    power2 = RitualisticPower(keypair=keypair2)
+    assert power.public_key() != power2.public_key()
+
+    # Generate keypair with same randomness
+    keypair3 = RitualisticKeypair.from_secure_randomness(blob)
+    power3 = RitualisticPower(keypair=keypair3)
+    assert power.public_key() == power3.public_key()
