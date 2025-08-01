@@ -1,3 +1,4 @@
+import pytest
 from nucypher_core.ferveo import (
     AggregatedTranscript,
     Dkg,
@@ -9,25 +10,25 @@ from nucypher_core.ferveo import (
     encrypt,
 )
 
-
-def gen_eth_addr(i: int) -> str:
-    return f"0x{i:040x}"  # TODO: Randomize
-
+SHARES_NUM = 4
 
 # This test is a mirror of the handover python test in ferveo
-def test_handover_with_encrypt_and_decrypt():
+@pytest.mark.parametrize("handover_slot_index", list(range(SHARES_NUM)))
+def test_handover_with_encrypt_and_decrypt(
+    get_random_checksum_address, handover_slot_index
+):
     tau = 1
     security_threshold = 3
-    shares_num = 4
+    shares_num = SHARES_NUM
     validators_num = shares_num + 2
-    validator_keypairs = [Keypair.random() for _ in range(0, validators_num)]
+
+    validator_keypairs = [Keypair.random() for _ in range(validators_num)]
+
+    # validators and associated keypairs must be in the same order
     validators = [
-        Validator(gen_eth_addr(i), keypair.public_key(), i)
+        Validator(get_random_checksum_address(), keypair.public_key(), i)
         for i, keypair in enumerate(validator_keypairs)
     ]
-
-    # Validators must be sorted by their public key
-    validators.sort(key=lambda v: v.address)
 
     # Each validator holds their own DKG instance and generates a transcript every
     # validator, including themselves
@@ -70,10 +71,9 @@ def test_handover_with_encrypt_and_decrypt():
     _ciphertext_serialized = bytes(ciphertext)
 
     # Let's simulate a handover
-    handover_slot_index = 0
     incoming_validator_keypair = Keypair.random()
     incoming_validator = Validator(
-        gen_eth_addr(1234567),
+        get_random_checksum_address(),
         incoming_validator_keypair.public_key(),
         handover_slot_index,
     )
