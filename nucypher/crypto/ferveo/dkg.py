@@ -126,7 +126,7 @@ def produce_decryption_share(
     return share
 
 
-def initiate_handover(
+def produce_handover_transcript(
     nodes: List[Validator],
     aggregated_transcript: AggregatedTranscript,
     handover_slot_index: int,

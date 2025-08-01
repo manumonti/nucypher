@@ -614,7 +614,7 @@ def test_perform_handover_transcript_phase(
 
     # cryptographic issue does not raise exception
     with patch(
-        "nucypher.crypto.ferveo.dkg.initiate_handover",
+        "nucypher.crypto.ferveo.dkg.produce_handover_transcript",
         side_effect=Exception("transcript cryptography failed"),
     ):
         async_tx = ursula.perform_handover_transcript_phase(

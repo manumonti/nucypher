@@ -857,7 +857,7 @@ class Operator(BaseActor):
         )
         aggregated_transcript = AggregatedTranscript.from_bytes(transcript)
 
-        handover_transcript = self.ritual_power.initiate_handover(
+        handover_transcript = self.ritual_power.produce_handover_transcript(
             nodes=validators,
             aggregated_transcript=aggregated_transcript,
             handover_slot_index=handover_slot_index,
