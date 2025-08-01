@@ -47,6 +47,11 @@ def ursula(ursulas):
     return ursulas[1]
 
 
+@pytest.fixture
+def handover_incoming_ursula(ursulas):
+    return ursulas[DKG_SIZE]
+
+
 @pytest.fixture(scope="module")
 def cohort(ursulas):
     return [u.staking_provider_address for u in ursulas[:DKG_SIZE]]
@@ -555,22 +560,21 @@ def test_async_tx_hooks_phase_2(ursula, mocker, aggregated_transcript, dkg_publi
 
 def test_perform_handover_transcript_phase(
     ursula,
-    random_address,
+    handover_incoming_ursula,
     cohort,
     agent,
     random_transcript,
-    get_random_checksum_address,
 ):
 
     init_timestamp = 123456
     handover = Coordinator.Handover(
         key=bytes(os.urandom(32)),
-        departing_validator=get_random_checksum_address(),
-        incoming_validator=ursula.checksum_address,
+        departing_validator=ursula.checksum_address,
+        incoming_validator=handover_incoming_ursula.checksum_address,
         init_timestamp=init_timestamp,
-        blinded_share=bytes(os.urandom(32)),
-        transcript=bytes(os.urandom(32)),
-        decryption_request_pubkey=bytes(os.urandom(32)),
+        blinded_share=b"",
+        transcript=b"",
+        decryption_request_pubkey=b"",
     )
     agent.get_handover = lambda *args, **kwargs: handover
 
@@ -585,12 +589,15 @@ def test_perform_handover_transcript_phase(
     ]
     for dkg_state in no_handover_dkg_states:
         agent.get_ritual_status = lambda *args, **kwargs: dkg_state
-        async_tx = ursula.perform_handover_transcript_phase(
-            ritual_id=0, departing_participant=random_address
+        assert not handover_incoming_ursula._is_handover_transcript_required(
+            ritual_id=0, departing_validator=ursula.checksum_address
+        )
+        async_tx = handover_incoming_ursula.perform_handover_transcript_phase(
+            ritual_id=0, departing_participant=ursula.checksum_address
         )
         assert async_tx is None  # no execution performed
 
-    # ensure no operation performed when ritual is ative but
+    # ensure no operation performed when ritual is active but
     # handover status is not awaiting transcript
     agent.get_ritual_status = lambda *args, **kwargs: Coordinator.RitualStatus.ACTIVE
     no_handover_transcript_states = [
@@ -601,8 +608,11 @@ def test_perform_handover_transcript_phase(
     ]
     for handover_state in no_handover_transcript_states:
         agent.get_handover_status = lambda *args, **kwargs: handover_state
-        async_tx = ursula.perform_handover_transcript_phase(
-            ritual_id=0, departing_participant=random_address
+        assert not handover_incoming_ursula._is_handover_transcript_required(
+            ritual_id=0, departing_validator=ursula.checksum_address
+        )
+        async_tx = handover_incoming_ursula.perform_handover_transcript_phase(
+            ritual_id=0, departing_participant=ursula.checksum_address
         )
         assert async_tx is None  # no execution performed
 
@@ -610,8 +620,8 @@ def test_perform_handover_transcript_phase(
     agent.get_handover_status = (
         lambda *args, **kwargs: Coordinator.HandoverStatus.HANDOVER_AWAITING_TRANSCRIPT
     )
-    assert ursula._is_handover_transcript_required(
-        ritual_id=0, departing_validator=random_address
+    assert handover_incoming_ursula._is_handover_transcript_required(
+        ritual_id=0, departing_validator=ursula.checksum_address
     )
 
     # cryptographic issue does not raise exception
@@ -619,33 +629,48 @@ def test_perform_handover_transcript_phase(
         "nucypher.crypto.ferveo.dkg.produce_handover_transcript",
         side_effect=Exception("transcript cryptography failed"),
     ):
-        async_tx = ursula.perform_handover_transcript_phase(
-            ritual_id=0, departing_participant=random_address
+        async_tx = handover_incoming_ursula.perform_handover_transcript_phase(
+            ritual_id=0, departing_participant=ursula.checksum_address
         )
         # exception not raised, but None returned
         assert async_tx is None
 
     phase_id = PhaseId(ritual_id=0, phase=HANDOVER_AWAITING_TRANSCRIPT)
     assert (
-        ursula.dkg_storage.get_ritual_phase_async_tx(phase_id=phase_id) is None
+        handover_incoming_ursula.dkg_storage.get_ritual_phase_async_tx(
+            phase_id=phase_id
+        )
+        is None
     ), "no tx data as yet"
 
     # mock the handover transcript production
-    ursula._produce_handover_transcript = lambda *args, **kwargs: random_transcript
+    handover_incoming_ursula._produce_handover_transcript = (
+        lambda *args, **kwargs: random_transcript
+    )
 
     # let's perform the handover transcript phase
-    async_tx = ursula.perform_handover_transcript_phase(
-        ritual_id=0, departing_participant=random_address
+    async_tx = handover_incoming_ursula.perform_handover_transcript_phase(
+        ritual_id=0, departing_participant=ursula.checksum_address
     )
 
     # ensure tx is tracked
     assert async_tx
-    assert ursula.dkg_storage.get_ritual_phase_async_tx(phase_id=phase_id) is async_tx
+    assert (
+        handover_incoming_ursula.dkg_storage.get_ritual_phase_async_tx(
+            phase_id=phase_id
+        )
+        is async_tx
+    )
 
     # try again
-    async_tx2 = ursula.perform_handover_transcript_phase(
-        ritual_id=0, departing_participant=random_address
+    async_tx2 = handover_incoming_ursula.perform_handover_transcript_phase(
+        ritual_id=0, departing_participant=ursula.checksum_address
     )
 
     assert async_tx2 is async_tx
-    assert ursula.dkg_storage.get_ritual_phase_async_tx(phase_id=phase_id) is async_tx2
+    assert (
+        handover_incoming_ursula.dkg_storage.get_ritual_phase_async_tx(
+            phase_id=phase_id
+        )
+        is async_tx2
+    )
