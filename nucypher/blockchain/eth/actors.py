@@ -958,7 +958,7 @@ class Operator(BaseActor):
             self.log.debug(
                 f"No action required for handover transcript for ritual #{ritual_id}"
             )
-            return
+            return None
 
         try:
             handover_transcript = self._produce_handover_transcript(
@@ -972,7 +972,7 @@ class Operator(BaseActor):
                 f"departing validator {departing_participant}: {str(e)}\n{stack_trace}"
             )
             self.log.critical(message)
-            return
+            return None
 
         async_tx = self._publish_handover_transcript(
             ritual_id=ritual_id,
@@ -1087,7 +1087,7 @@ class Operator(BaseActor):
             self.log.debug(
                 f"No action required for handover blinded share for ritual #{ritual_id}"
             )
-            return
+            return None
 
         # check if there is a pending tx for this phase
         async_tx = self.dkg_storage.get_ritual_phase_async_tx(
@@ -1109,7 +1109,7 @@ class Operator(BaseActor):
             self.log.critical(
                 f"Failed to produce handover blinded share for ritual #{ritual_id}: {e}\n{stack_trace}"
             )
-            return
+            return None
 
         async_tx = self._publish_blinded_share_for_handover(
             ritual_id=ritual_id,
