@@ -937,6 +937,9 @@ class Operator(BaseActor):
         departing_participant: ChecksumAddress,
         **kwargs,
     ) -> Optional[AsyncTx]:
+        # clear ritual object and validators since handover modifies ritual
+        self.dkg_storage.clear_active_ritual_object(ritual_id)
+        self.dkg_storage.clear_validators(ritual_id)
 
         # check if there is a pending tx for this phase
         async_tx = self.dkg_storage.get_ritual_phase_async_tx(
@@ -1073,6 +1076,9 @@ class Operator(BaseActor):
     def perform_handover_blinded_share_phase(
         self, ritual_id: int, **kwargs
     ) -> Optional[AsyncTx]:
+        # clear ritual object and validators since handover modifies ritual
+        self.dkg_storage.clear_active_ritual_object(ritual_id)
+        self.dkg_storage.clear_validators(ritual_id)
 
         if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
             self.log.debug(
@@ -1117,6 +1123,11 @@ class Operator(BaseActor):
             f"DKG ritual #{ritual_id}."
         )
         return async_tx
+
+    def perform_handover_finalization_phase(self, ritual_id: int, **kwargs):
+        # clear ritual object and validators since handover modifies ritual
+        self.dkg_storage.clear_active_ritual_object(ritual_id)
+        self.dkg_storage.clear_validators(ritual_id)
 
     def produce_decryption_share(
         self,

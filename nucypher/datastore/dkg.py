@@ -80,6 +80,7 @@ class DKGStorage:
         key = self.__get_phase_key(phase_id.phase)
         return self._data[key].get(phase_id.ritual_id)
 
+    # Validators for rituals
     def store_validators(self, ritual_id: int, validators: List[Validator]) -> None:
         self._data[self._KEY_VALIDATORS][ritual_id] = list(validators)
 
@@ -89,6 +90,13 @@ class DKGStorage:
             return None
 
         return list(validators)
+
+    def clear_validators(self, ritual_id: int) -> bool:
+        try:
+            del self._data[self._KEY_VALIDATORS][ritual_id]
+            return True
+        except KeyError:
+            return False
 
     #
     # Active Rituals
@@ -101,3 +109,10 @@ class DKGStorage:
 
     def get_active_ritual(self, ritual_id: int) -> Optional[Coordinator.Ritual]:
         return self._data[self._KEY_ACTIVE_RITUAL].get(ritual_id)
+
+    def clear_active_ritual_object(self, ritual_id: int) -> bool:
+        try:
+            del self._data[self._KEY_ACTIVE_RITUAL][ritual_id]
+            return True
+        except KeyError:
+            return False
