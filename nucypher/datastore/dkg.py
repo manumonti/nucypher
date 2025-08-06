@@ -6,7 +6,13 @@ from nucypher_core.ferveo import (
     Validator,
 )
 
-from nucypher.blockchain.eth.models import PHASE1, Coordinator
+from nucypher.blockchain.eth.models import (
+    HANDOVER_AWAITING_BLINDED_SHARE,
+    HANDOVER_AWAITING_TRANSCRIPT,
+    PHASE1,
+    PHASE2,
+    Coordinator,
+)
 from nucypher.types import PhaseId
 
 
@@ -18,6 +24,9 @@ class DKGStorage:
     _KEY_VALIDATORS = "validators"
     # round 2
     _KEY_PHASE_2_TXS = "phase_2_txs"
+    # handover phases
+    _KEY_PHASE_AWAITING_TRANSCRIPT_TXS = "handover_transcript_txs"
+    _KEY_PHASE_AWAITING_BLINDED_SHARE_TXS = "handover_blinded_share_txs"
     # active rituals
     _KEY_ACTIVE_RITUAL = "active_rituals"
 
@@ -26,6 +35,8 @@ class DKGStorage:
         _KEY_VALIDATORS,
         _KEY_PHASE_2_TXS,
         _KEY_ACTIVE_RITUAL,
+        _KEY_PHASE_AWAITING_TRANSCRIPT_TXS,
+        _KEY_PHASE_AWAITING_BLINDED_SHARE_TXS,
     ]
 
     def __init__(self):
@@ -45,7 +56,14 @@ class DKGStorage:
     def __get_phase_key(cls, phase: int):
         if phase == PHASE1:
             return cls._KEY_PHASE_1_TXS
-        return cls._KEY_PHASE_2_TXS
+        elif phase == PHASE2:
+            return cls._KEY_PHASE_2_TXS
+        elif phase == HANDOVER_AWAITING_TRANSCRIPT:
+            return cls._KEY_PHASE_AWAITING_TRANSCRIPT_TXS
+        elif phase == HANDOVER_AWAITING_BLINDED_SHARE:
+            return cls._KEY_PHASE_AWAITING_BLINDED_SHARE_TXS
+        else:
+            raise ValueError(f"Unknown phase: {phase}")
 
     def store_ritual_phase_async_tx(self, phase_id: PhaseId, async_tx: AsyncTx):
         key = self.__get_phase_key(phase_id.phase)

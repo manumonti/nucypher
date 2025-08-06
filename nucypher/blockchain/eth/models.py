@@ -19,7 +19,6 @@ PHASE1 = PhaseNumber(1)
 PHASE2 = PhaseNumber(2)
 HANDOVER_AWAITING_TRANSCRIPT = PhaseNumber(11)
 HANDOVER_AWAITING_BLINDED_SHARE = PhaseNumber(12)
-HANDOVER_AWAITING_FINALIZATION = PhaseNumber(13)
 
 @dataclass
 class Ferveo:
