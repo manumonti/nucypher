@@ -995,12 +995,6 @@ class Operator(BaseActor):
         )
 
     def _produce_blinded_share_for_handover(self, ritual_id: int) -> bytes:
-        if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
-            self.log.debug(
-                f"No action required for handover blinded share for ritual #{ritual_id}"
-            )
-            return
-
         ritual = self._resolve_ritual(ritual_id)
         # FIXME: Workaround: add serialized public key to aggregated transcript.
         # Since we use serde/bincode in rust, we need a metadata field for the public key, which is the field size,
@@ -1099,6 +1093,12 @@ class Operator(BaseActor):
                 f"for ritual #{ritual_id}, blinded share phase, (final: {async_tx.final})."
             )
             return async_tx
+
+        if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
+            self.log.debug(
+                f"No action required for handover blinded share for ritual #{ritual_id}"
+            )
+            return None
 
         try:
             blinded_share = self._produce_blinded_share_for_handover(
