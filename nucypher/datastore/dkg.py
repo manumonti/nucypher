@@ -72,8 +72,11 @@ class DKGStorage:
     def clear_ritual_phase_async_tx(self, phase_id: PhaseId, async_tx: AsyncTx) -> bool:
         key = self.__get_phase_key(phase_id.phase)
         if self._data[key].get(phase_id.ritual_id) is async_tx:
-            del self._data[key][phase_id.ritual_id]
-            return True
+            try:
+                del self._data[key][phase_id.ritual_id]
+                return True
+            except KeyError:
+                pass
         return False
 
     def get_ritual_phase_async_tx(self, phase_id: PhaseId) -> Optional[AsyncTx]:
