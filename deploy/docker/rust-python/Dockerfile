@@ -1,4 +1,4 @@
-FROM rust:slim-buster
+FROM rust:slim-bullseye
 
 # prepare container
 RUN apt-get update -y
