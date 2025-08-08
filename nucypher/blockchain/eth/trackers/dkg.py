@@ -115,7 +115,7 @@ class ActiveRitualTracker:
             self.contract.events.StartAggregationRound: self.operator.perform_round_2,
             self.contract.events.HandoverRequest: self.operator.perform_handover_transcript_phase,
             self.contract.events.HandoverTranscriptPosted: self.operator.perform_handover_blinded_share_phase,
-            # self.contract.events.HandoverFinalized: self.operator.perform_handover_finalization_phase,  # TODO: See #3623
+            self.contract.events.HandoverFinalized: self.operator.perform_handover_finalization_phase,
         }
 
         self.events = [
@@ -124,7 +124,7 @@ class ActiveRitualTracker:
             self.contract.events.EndRitual,
             self.contract.events.HandoverRequest,
             self.contract.events.HandoverTranscriptPosted,
-            # self.contract.events.HandoverFinalized,  # TODO: See #3623
+            self.contract.events.HandoverFinalized,
         ]
 
         # TODO: Remove the default JSON-RPC retry middleware

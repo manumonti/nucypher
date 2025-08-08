@@ -354,23 +354,20 @@ class Operator(BaseActor):
             self.dkg_storage.clear(ritual_id)
             raise self.ActorError(f"Ritual #{ritual_id} is not active.")
 
-        # TODO: Potential caching issue. Invalidating caches for now. See #3623
-        return self.coordinator_agent.get_ritual(ritual_id)
-        # ritual = self.dkg_storage.get_active_ritual(ritual_id)
-        # if not ritual:
-        #     ritual = self.coordinator_agent.get_ritual(ritual_id)
-        #     self.dkg_storage.store_active_ritual(active_ritual=ritual)
+        ritual = self.dkg_storage.get_active_ritual(ritual_id)
+        if not ritual:
+            ritual = self.coordinator_agent.get_ritual(ritual_id)
+            self.dkg_storage.store_active_ritual(active_ritual=ritual)
 
-        # return ritual
+        return ritual
 
     def _resolve_validators(
         self,
         ritual: Coordinator.Ritual,
     ) -> List[Validator]:
-        # TODO: Potential caching issue. Invalidating caches for now. See #3623
-        # validators = self.dkg_storage.get_validators(ritual.id)
-        # if validators:
-        #     return validators
+        validators = self.dkg_storage.get_validators(ritual.id)
+        if validators:
+            return validators
 
         result = list()
         for i, staking_provider_address in enumerate(ritual.providers):
@@ -398,7 +395,7 @@ class Operator(BaseActor):
                 )
             result.append(external_validator)
 
-        # self.dkg_storage.store_validators(ritual.id, result)  # TODO: See #3623
+        self.dkg_storage.store_validators(ritual.id, result)
 
         return result
 
@@ -690,7 +687,7 @@ class Operator(BaseActor):
             return
 
         # publish the transcript and store the receipt
-        # self.dkg_storage.store_validators(ritual_id=ritual.id, validators=validators) # TODO: See #3623
+        self.dkg_storage.store_validators(ritual_id=ritual.id, validators=validators)
         async_tx = self.publish_transcript(ritual_id=ritual.id, transcript=transcript)
 
         # logging
@@ -940,6 +937,9 @@ class Operator(BaseActor):
         departing_participant: ChecksumAddress,
         **kwargs,
     ) -> Optional[AsyncTx]:
+        # clear ritual object and validators since handover modifies ritual
+        self.dkg_storage.clear_active_ritual_object(ritual_id)
+        self.dkg_storage.clear_validators(ritual_id)
 
         # check if there is a pending tx for this phase
         async_tx = self.dkg_storage.get_ritual_phase_async_tx(
@@ -1076,6 +1076,9 @@ class Operator(BaseActor):
     def perform_handover_blinded_share_phase(
         self, ritual_id: int, **kwargs
     ) -> Optional[AsyncTx]:
+        # clear ritual object and validators since handover modifies ritual
+        self.dkg_storage.clear_active_ritual_object(ritual_id)
+        self.dkg_storage.clear_validators(ritual_id)
 
         if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
             self.log.debug(
@@ -1120,6 +1123,11 @@ class Operator(BaseActor):
             f"DKG ritual #{ritual_id}."
         )
         return async_tx
+
+    def perform_handover_finalization_phase(self, ritual_id: int, **kwargs):
+        # clear ritual object and validators since handover modifies ritual
+        self.dkg_storage.clear_active_ritual_object(ritual_id)
+        self.dkg_storage.clear_validators(ritual_id)
 
     def produce_decryption_share(
         self,
