@@ -313,21 +313,19 @@ class RitualisticPower(KeyPairBasedPower):
         )
         return decryption_share
 
-    def initiate_handover(
+    def produce_handover_transcript(
         self,
         nodes: List[Validator],
         aggregated_transcript: AggregatedTranscript,
         handover_slot_index: int,
-        me: Validator,
         ritual_id: int,
         shares: int,
         threshold: int,
     ) -> HandoverTranscript:
-        handover_transcript = dkg.initiate_handover(
+        handover_transcript = dkg.produce_handover_transcript(
             nodes=nodes,
             aggregated_transcript=aggregated_transcript,
             handover_slot_index=handover_slot_index,
-            me=me,
             ritual_id=ritual_id,
             shares=shares,
             threshold=threshold,
@@ -341,7 +339,7 @@ class RitualisticPower(KeyPairBasedPower):
         ritual_id: int,
         shares: int,
         threshold: int,
-        nodes: list,
+        nodes: List[Validator],
     ) -> Transcript:
         transcript = dkg.generate_transcript(
             ritual_id=ritual_id,

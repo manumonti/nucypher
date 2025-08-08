@@ -126,12 +126,11 @@ def produce_decryption_share(
     return share
 
 
-def initiate_handover(
+def produce_handover_transcript(
     nodes: List[Validator],
     aggregated_transcript: AggregatedTranscript,
     handover_slot_index: int,
     keypair: Keypair,
-    me: Validator,
     ritual_id: int,
     shares: int,
     threshold: int,
@@ -140,7 +139,12 @@ def initiate_handover(
         raise Exception("missing arguments")  # sanity check
 
     dkg = _make_dkg(
-        me=me, ritual_id=ritual_id, shares=shares, threshold=threshold, nodes=nodes
+        # TODO: is fixed 0-index fine here? I don't believe it matters
+        me=nodes[0],
+        ritual_id=ritual_id,
+        shares=shares,
+        threshold=threshold,
+        nodes=nodes,
     )
     handover_transcript = dkg.generate_handover_transcript(
         aggregated_transcript,

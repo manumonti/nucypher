@@ -800,43 +800,81 @@ class Operator(BaseActor):
 
         return async_tx
 
+    def _is_handover_applicable_to_node(
+        self,
+        ritual_id: int,
+        departing_validator: ChecksumAddress,
+        expected_handover_status: int,
+        require_incoming_validator_match: bool = False,
+    ) -> bool:
+        """
+        Determines if the handover phase is applicable to this node for a given ritual.
+        Checks ritual status, handover request presence, and handover status.
+        If require_incoming_validator_match is True, also checks if this node is the incoming validator.
+        """
+
+        # check ritual status
+        status = self.coordinator_agent.get_ritual_status(ritual_id=ritual_id)
+        if status != Coordinator.RitualStatus.ACTIVE:
+            # This is a normal state when replaying/syncing historical
+            # blocks that contain StartRitual events of pending or completed rituals.
+            self.log.debug(
+                f"Ritual #{ritual_id} is not active so handover is not possible; dkg status={status}."
+            )
+            return False
+
+        # check handover request present for the ritual
+        handover_request = self.coordinator_agent.get_handover(
+            ritual_id=ritual_id, departing_validator=departing_validator
+        )
+        # empty handover object could be returned - check departing_validator
+        if handover_request.departing_validator != departing_validator:
+            # handover request not found for departing validator
+            if departing_validator == self.checksum_address:
+                self.log.debug(
+                    f"Handover request for ritual #{ritual_id} is not for this node."
+                )
+            else:
+                self.log.debug(
+                    f"No handover request for ritual #{ritual_id} with departing validator {departing_validator}."
+                )
+            return False
+
+        # Optionally check incoming validator
+        if (
+            require_incoming_validator_match
+            and handover_request.incoming_validator != self.checksum_address
+        ):
+            self.log.debug(
+                f"Handover request for ritual #{ritual_id} is not for this node."
+            )
+            return False
+
+        # Check handover status
+        handover_status = self.coordinator_agent.get_handover_status(
+            ritual_id=ritual_id,
+            departing_validator=departing_validator,
+        )
+        if handover_status != expected_handover_status:
+            self.log.debug(
+                f"Handover status, {handover_status}, for ritual #{ritual_id} is not in the expected state {expected_handover_status}."
+            )
+            return False
+
+        return True
+
     def _is_handover_transcript_required(
         self,
         ritual_id: int,
         departing_validator: ChecksumAddress,
     ) -> bool:
         """Check whether node needs to act as the incoming validator in a handover."""
-
-        # check ritual status from the blockchain
-        status = self.coordinator_agent.get_ritual_status(ritual_id=ritual_id)
-        if status != Coordinator.RitualStatus.ACTIVE:
-            # This is a normal state when replaying/syncing historical
-            # blocks that contain StartRitual events of pending or completed rituals.
-            self.log.debug(f"ritual #{ritual_id} is not active; status={status}.")
-            return False
-
-        handover_request = self.coordinator_agent.get_handover(
-            ritual_id=ritual_id, departing_validator=departing_validator
-        )
-
-        if handover_request.incoming_validator != self.checksum_address:
-            self.log.debug(
-                f"Handover request for ritual #{ritual_id} is not for this node."
-            )
-            return False
-
-        handover_status = self.coordinator_agent.get_handover_status(
+        return self._is_handover_applicable_to_node(
             ritual_id=ritual_id,
             departing_validator=departing_validator,
+            expected_handover_status=Coordinator.HandoverStatus.HANDOVER_AWAITING_TRANSCRIPT,
+            require_incoming_validator_match=True,
         )
-
-        if handover_status != Coordinator.HandoverStatus.HANDOVER_AWAITING_TRANSCRIPT:
-            self.log.debug(
-                f"Handover request for ritual #{ritual_id} is not in the expected state."
-            )
-            return False
-
-        return True
 
     def _produce_handover_transcript(
         self, ritual_id: int, departing_validator: ChecksumAddress
@@ -857,11 +895,10 @@ class Operator(BaseActor):
         )
         aggregated_transcript = AggregatedTranscript.from_bytes(transcript)
 
-        handover_transcript = self.ritual_power.initiate_handover(
+        handover_transcript = self.ritual_power.produce_handover_transcript(
             nodes=validators,
             aggregated_transcript=aggregated_transcript,
             handover_slot_index=handover_slot_index,
-            me=validators[0],  # FIXME
             ritual_id=ritual_id,
             shares=ritual.dkg_size,
             threshold=ritual.threshold,
@@ -921,7 +958,7 @@ class Operator(BaseActor):
             self.log.debug(
                 f"No action required for handover transcript for ritual #{ritual_id}"
             )
-            return
+            return None
 
         try:
             handover_transcript = self._produce_handover_transcript(
@@ -935,7 +972,7 @@ class Operator(BaseActor):
                 f"departing validator {departing_participant}: {str(e)}\n{stack_trace}"
             )
             self.log.critical(message)
-            return
+            return None
 
         async_tx = self._publish_handover_transcript(
             ritual_id=ritual_id,
@@ -950,46 +987,14 @@ class Operator(BaseActor):
 
     def _is_handover_blinded_share_required(self, ritual_id: int) -> bool:
         """Check whether node needs to post a blind share for handover"""
-
-        # check ritual status from the blockchain
-        dkg_status = self.coordinator_agent.get_ritual_status(ritual_id=ritual_id)
-        if dkg_status != Coordinator.RitualStatus.ACTIVE:
-            self.log.debug(
-                f"ritual #{ritual_id} is not active, handover is not possible; status={dkg_status}."
-            )
-            return False
-
-        handover_request = self.coordinator_agent.get_handover(
-            ritual_id=ritual_id, departing_validator=self.checksum_address
+        return self._is_handover_applicable_to_node(
+            ritual_id=ritual_id,
+            departing_validator=self.checksum_address,
+            expected_handover_status=Coordinator.HandoverStatus.HANDOVER_AWAITING_BLINDED_SHARE,
+            require_incoming_validator_match=False,
         )
-
-        if handover_request.departing_validator != self.checksum_address:
-            self.log.debug(
-                f"Handover request for ritual #{ritual_id} is not for this node."
-            )
-            return False
-
-        handover_status = self.coordinator_agent.get_handover_status(
-            ritual_id=ritual_id, departing_validator=self.checksum_address
-        )
-        if (
-            handover_status
-            != Coordinator.HandoverStatus.HANDOVER_AWAITING_BLINDED_SHARE
-        ):
-            self.log.debug(
-                f"ritual #{ritual_id} is not waiting for handover blind share; status={handover_status}."
-            )
-            return False
-
-        return True
 
     def _produce_blinded_share_for_handover(self, ritual_id: int) -> bytes:
-        if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
-            self.log.debug(
-                f"No action required for handover blinded share for ritual #{ritual_id}"
-            )
-            return
-
         ritual = self._resolve_ritual(ritual_id)
         # FIXME: Workaround: add serialized public key to aggregated transcript.
         # Since we use serde/bincode in rust, we need a metadata field for the public key, which is the field size,
@@ -1076,7 +1081,7 @@ class Operator(BaseActor):
             self.log.debug(
                 f"No action required for handover blinded share for ritual #{ritual_id}"
             )
-            return
+            return None
 
         # check if there is a pending tx for this phase
         async_tx = self.dkg_storage.get_ritual_phase_async_tx(
@@ -1089,6 +1094,12 @@ class Operator(BaseActor):
             )
             return async_tx
 
+        if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
+            self.log.debug(
+                f"No action required for handover blinded share for ritual #{ritual_id}"
+            )
+            return None
+
         try:
             blinded_share = self._produce_blinded_share_for_handover(
                 ritual_id=ritual_id,
@@ -1098,7 +1109,7 @@ class Operator(BaseActor):
             self.log.critical(
                 f"Failed to produce handover blinded share for ritual #{ritual_id}: {e}\n{stack_trace}"
             )
-            return
+            return None
 
         async_tx = self._publish_blinded_share_for_handover(
             ritual_id=ritual_id,
