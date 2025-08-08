@@ -7,7 +7,9 @@ description = "A threshold access control application to empower privacy in dece
 [tool.poetry.dependencies]
 python = ">=3.9,<4"
 
-nucypher-core = "==0.13.0"
+# TODO update once we have a new release
+nucypher-core = { git = "https://github.com/nucypher/nucypher-core.git", branch = "handover", subdirectory = "nucypher-core-python" }
+
 cryptography = "*"
 pynacl = ">=1.4.0"
 mnemonic = "*"
@@ -22,7 +24,7 @@ mako = "*"
 click = '*'
 colorama = '*'
 tabulate = '*'
-marshmallow = '*'
+marshmallow = '^3.26.1'  # TODO revert back to '*' in the future - breaking change in 4.0 - TypeError: validate_method() got an unexpected keyword argument 'data_key'
 appdirs = '*'
 constant-sorrow = '^0.1.0a9'
 prometheus-client = '*'
@@ -35,6 +37,7 @@ nucypher-pychalk = "^2.0.2"
 nucypher-snaptime = "^0.2.5"
 # TODO: this is to match requirements.txt; update and relock for 7.6.x
 python-statemachine = "==2.3.4"
+pydantic = "~2.11.0"  # TODO 2.12; there some issue - 'pydantic_core._pydantic_core.ValidationInfo' object has no attribute 'manifest'
 
 [tool.poetry.group.dev.dependencies]
 pytest = '*'

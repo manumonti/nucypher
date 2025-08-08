@@ -24,8 +24,10 @@ from nucypher_core.ferveo import (
     DecryptionShareSimple,
     DkgPublicKey,
     FerveoVariant,
+    HandoverTranscript,
     Transcript,
     Validator,
+    ValidatorMessage,
 )
 from web3 import HTTPProvider, Web3
 from web3.types import TxReceipt
@@ -47,7 +49,13 @@ from nucypher.blockchain.eth.interfaces import (
     BlockchainInterface,
     BlockchainInterfaceFactory,
 )
-from nucypher.blockchain.eth.models import PHASE1, PHASE2, Coordinator
+from nucypher.blockchain.eth.models import (
+    HANDOVER_AWAITING_BLINDED_SHARE,
+    HANDOVER_AWAITING_TRANSCRIPT,
+    PHASE1,
+    PHASE2,
+    Coordinator,
+)
 from nucypher.blockchain.eth.registry import ContractRegistry
 from nucypher.blockchain.eth.signers import Signer
 from nucypher.blockchain.eth.trackers import dkg
@@ -346,28 +354,32 @@ class Operator(BaseActor):
             self.dkg_storage.clear(ritual_id)
             raise self.ActorError(f"Ritual #{ritual_id} is not active.")
 
-        ritual = self.dkg_storage.get_active_ritual(ritual_id)
-        if not ritual:
-            ritual = self.coordinator_agent.get_ritual(ritual_id)
-            self.dkg_storage.store_active_ritual(active_ritual=ritual)
+        # TODO: Potential caching issue. Invalidating caches for now. See #3623
+        return self.coordinator_agent.get_ritual(ritual_id)
+        # ritual = self.dkg_storage.get_active_ritual(ritual_id)
+        # if not ritual:
+        #     ritual = self.coordinator_agent.get_ritual(ritual_id)
+        #     self.dkg_storage.store_active_ritual(active_ritual=ritual)
 
-        return ritual
+        # return ritual
 
     def _resolve_validators(
         self,
         ritual: Coordinator.Ritual,
     ) -> List[Validator]:
-        validators = self.dkg_storage.get_validators(ritual.id)
-        if validators:
-            return validators
+        # TODO: Potential caching issue. Invalidating caches for now. See #3623
+        # validators = self.dkg_storage.get_validators(ritual.id)
+        # if validators:
+        #     return validators
 
         result = list()
-        for staking_provider_address in ritual.providers:
+        for i, staking_provider_address in enumerate(ritual.providers):
             if self.checksum_address == staking_provider_address:
                 # Local
                 external_validator = Validator(
                     address=self.checksum_address,
                     public_key=self.ritual_power.public_key(),
+                    share_index=i,
                 )
             else:
                 # Remote
@@ -380,41 +392,78 @@ class Operator(BaseActor):
                     f"Ferveo public key for {staking_provider_address} is {bytes(public_key).hex()[:-8:-1]}"
                 )
                 external_validator = Validator(
-                    address=staking_provider_address, public_key=public_key
+                    address=staking_provider_address,
+                    public_key=public_key,
+                    share_index=i,
                 )
             result.append(external_validator)
 
-        result = sorted(result, key=lambda x: x.address)
-        self.dkg_storage.store_validators(ritual.id, result)
+        # self.dkg_storage.store_validators(ritual.id, result)  # TODO: See #3623
 
         return result
 
     def _setup_async_hooks(
         self, phase_id: PhaseId, *args
     ) -> BlockchainInterface.AsyncTxHooks:
-        tx_type = "POST_TRANSCRIPT" if phase_id.phase == PHASE1 else "POST_AGGREGATE"
+
+        TX_TYPES = {
+            PHASE1: "POST_TRANSCRIPT",
+            PHASE2: "POST_AGGREGATE",
+            HANDOVER_AWAITING_TRANSCRIPT: "HANDOVER_AWAITING_TRANSCRIPT",
+            HANDOVER_AWAITING_BLINDED_SHARE: "HANDOVER_POST_BLINDED_SHARE",
+        }
+
+        tx_type = TX_TYPES[phase_id.phase]
 
         def resubmit_tx():
             if phase_id.phase == PHASE1:
                 # check status of ritual before resubmitting; prevent infinite loops
                 if not self._is_phase_1_action_required(ritual_id=phase_id.ritual_id):
                     self.log.info(
-                        f"No need to resubmit tx: additional action not required for ritual# {phase_id.ritual_id} (status={self.coordinator_agent.get_ritual_status(phase_id.ritual_id)})"
+                        f"No need to resubmit tx: additional action not required for ritual #{phase_id.ritual_id} "
+                        f"(status={self.coordinator_agent.get_ritual_status(phase_id.ritual_id)})"
                     )
                     return
                 async_tx = self.publish_transcript(*args)
-            else:
+            elif phase_id.phase == PHASE2:
                 # check status of ritual before resubmitting; prevent infinite loops
                 if not self._is_phase_2_action_required(ritual_id=phase_id.ritual_id):
                     self.log.info(
-                        f"No need to resubmit tx: additional action not required for ritual# {phase_id.ritual_id} (status={self.coordinator_agent.get_ritual_status(phase_id.ritual_id)})"
+                        f"No need to resubmit tx: additional action not required for ritual #{phase_id.ritual_id} "
+                        f"(status={self.coordinator_agent.get_ritual_status(phase_id.ritual_id)})"
                     )
                     return
                 async_tx = self.publish_aggregated_transcript(*args)
+            elif phase_id.phase == HANDOVER_AWAITING_TRANSCRIPT:
+                # check status of handover before resubmitting; prevent infinite loops
+                _, departing_validator, _ = args
+                if not self._is_handover_transcript_required(
+                    ritual_id=phase_id.ritual_id,
+                    departing_validator=departing_validator,
+                ):
+                    self.log.info(
+                        f"No need to resubmit tx: additional action not required for handover in ritual #{phase_id.ritual_id}"
+                    )
+                    return
+                async_tx = self._publish_handover_transcript(*args)
+            elif phase_id.phase == HANDOVER_AWAITING_BLINDED_SHARE:
+                # check status of handover before resubmitting; prevent infinite loops
+                if not self._is_handover_blinded_share_required(
+                    ritual_id=phase_id.ritual_id
+                ):
+                    self.log.info(
+                        f"No need to resubmit tx: additional action not required for handover in ritual #{phase_id.ritual_id}"
+                    )
+                    return
+                async_tx = self._publish_blinded_share_for_handover(*args)
+            else:
+                raise ValueError(
+                    f"Unsupported phase {phase_id.phase} for async tx resubmission"
+                )
 
             self.log.info(
                 f"{self.transacting_power.account[:8]} resubmitted a new async tx {async_tx.id} "
-                f"for DKG ritual #{phase_id.ritual_id}"
+                f"of type {tx_type} for DKG ritual #{phase_id.ritual_id}."
             )
 
         def on_broadcast_failure(tx: FutureTx, e: Exception):
@@ -641,7 +690,7 @@ class Operator(BaseActor):
             return
 
         # publish the transcript and store the receipt
-        self.dkg_storage.store_validators(ritual_id=ritual.id, validators=validators)
+        # self.dkg_storage.store_validators(ritual_id=ritual.id, validators=validators) # TODO: See #3623
         async_tx = self.publish_transcript(ritual_id=ritual.id, transcript=transcript)
 
         # logging
@@ -694,7 +743,7 @@ class Operator(BaseActor):
         )
         if async_tx:
             self.log.info(
-                f"Active ritual in progress: {self.transacting_power.account} has submitted tx"
+                f"Active ritual in progress: {self.transacting_power.account} has submitted tx "
                 f"for ritual #{ritual_id}, phase #{PHASE2} (final: {async_tx.final})."
             )
             return async_tx
@@ -711,19 +760,20 @@ class Operator(BaseActor):
         )
         validators = self._resolve_validators(ritual)
 
-        transcripts = (Transcript.from_bytes(bytes(t)) for t in ritual.transcripts)
-        messages = list(zip(validators, transcripts))
+        transcripts = list(Transcript.from_bytes(bytes(t)) for t in ritual.transcripts)
+        messages = [ValidatorMessage(v, t) for v, t in zip(validators, transcripts)]
         try:
-            (
-                aggregated_transcript,
-                dkg_public_key,
-            ) = self.ritual_power.aggregate_transcripts(
+            aggregated_transcript = self.ritual_power.aggregate_transcripts(
                 threshold=ritual.threshold,
                 shares=ritual.shares,
                 checksum_address=self.checksum_address,
                 ritual_id=ritual.id,
-                transcripts=messages,
+                validator_messages=messages,
             )
+            dkg_public_key = aggregated_transcript.public_key
+            # FIXME: Workaround: remove the public key (last 8 + 48 bytes of the aggregated transcript)
+            # to pass size validation check on contract publish. See ferveo#209
+            aggregated_transcript = bytes(aggregated_transcript)[: -8 - 48]
         except Exception as e:
             stack_trace = traceback.format_stack()
             self.log.critical(
@@ -750,6 +800,316 @@ class Operator(BaseActor):
 
         return async_tx
 
+    def _is_handover_transcript_required(
+        self,
+        ritual_id: int,
+        departing_validator: ChecksumAddress,
+    ) -> bool:
+        """Check whether node needs to act as the incoming validator in a handover."""
+
+        # check ritual status from the blockchain
+        status = self.coordinator_agent.get_ritual_status(ritual_id=ritual_id)
+        if status != Coordinator.RitualStatus.ACTIVE:
+            # This is a normal state when replaying/syncing historical
+            # blocks that contain StartRitual events of pending or completed rituals.
+            self.log.debug(f"ritual #{ritual_id} is not active; status={status}.")
+            return False
+
+        handover_request = self.coordinator_agent.get_handover(
+            ritual_id=ritual_id, departing_validator=departing_validator
+        )
+
+        if handover_request.incoming_validator != self.checksum_address:
+            self.log.debug(
+                f"Handover request for ritual #{ritual_id} is not for this node."
+            )
+            return False
+
+        handover_status = self.coordinator_agent.get_handover_status(
+            ritual_id=ritual_id,
+            departing_validator=departing_validator,
+        )
+
+        if handover_status != Coordinator.HandoverStatus.HANDOVER_AWAITING_TRANSCRIPT:
+            self.log.debug(
+                f"Handover request for ritual #{ritual_id} is not in the expected state."
+            )
+            return False
+
+        return True
+
+    def _produce_handover_transcript(
+        self, ritual_id: int, departing_validator: ChecksumAddress
+    ) -> HandoverTranscript:
+        ritual = self._resolve_ritual(ritual_id)
+        validators = self._resolve_validators(ritual)
+
+        # Raises ValueError if departing_validator is not in the providers list
+        handover_slot_index = ritual.providers.index(departing_validator)
+        # FIXME: Workaround: add serialized public key to aggregated transcript.
+        # Since we use serde/bincode in rust, we need a metadata field for the public key, which is the field size,
+        # as 8 bytes in little-endian. See ferveo#209
+        public_key_metadata = b"0\x00\x00\x00\x00\x00\x00\x00"
+        transcript = (
+            bytes(ritual.aggregated_transcript)
+            + public_key_metadata
+            + bytes(ritual.public_key)
+        )
+        aggregated_transcript = AggregatedTranscript.from_bytes(transcript)
+
+        handover_transcript = self.ritual_power.initiate_handover(
+            nodes=validators,
+            aggregated_transcript=aggregated_transcript,
+            handover_slot_index=handover_slot_index,
+            me=validators[0],  # FIXME
+            ritual_id=ritual_id,
+            shares=ritual.dkg_size,
+            threshold=ritual.threshold,
+        )
+        return handover_transcript
+
+    def _publish_handover_transcript(
+        self,
+        ritual_id: int,
+        departing_validator: ChecksumAddress,
+        handover_transcript: HandoverTranscript,
+    ) -> AsyncTx:
+        """Publish a handover transcript to the Coordinator."""
+        participant_public_key = self.threshold_request_power.get_pubkey_from_ritual_id(
+            ritual_id
+        )
+        handover_transcript = bytes(handover_transcript)
+        identifier = PhaseId(ritual_id=ritual_id, phase=HANDOVER_AWAITING_TRANSCRIPT)
+        async_tx_hooks = self._setup_async_hooks(
+            identifier, ritual_id, departing_validator, handover_transcript
+        )
+
+        async_tx = self.coordinator_agent.post_handover_transcript(
+            ritual_id=ritual_id,
+            departing_validator=departing_validator,
+            handover_transcript=handover_transcript,
+            participant_public_key=participant_public_key,
+            transacting_power=self.transacting_power,
+            async_tx_hooks=async_tx_hooks,
+        )
+        self.dkg_storage.store_ritual_phase_async_tx(
+            phase_id=identifier, async_tx=async_tx
+        )
+        return async_tx
+
+    def perform_handover_transcript_phase(
+        self,
+        ritual_id: int,
+        departing_participant: ChecksumAddress,
+        **kwargs,
+    ) -> Optional[AsyncTx]:
+
+        # check if there is a pending tx for this phase
+        async_tx = self.dkg_storage.get_ritual_phase_async_tx(
+            phase_id=PhaseId(ritual_id, HANDOVER_AWAITING_TRANSCRIPT)
+        )
+        if async_tx:
+            self.log.info(
+                f"Active handover in progress: {self.transacting_power.account} has submitted tx "
+                f"for ritual #{ritual_id}, handover transcript phase, (final: {async_tx.final})."
+            )
+            return async_tx
+
+        if not self._is_handover_transcript_required(
+            ritual_id=ritual_id, departing_validator=departing_participant
+        ):
+            self.log.debug(
+                f"No action required for handover transcript for ritual #{ritual_id}"
+            )
+            return
+
+        try:
+            handover_transcript = self._produce_handover_transcript(
+                ritual_id=ritual_id,
+                departing_validator=departing_participant,
+            )
+        except Exception as e:
+            stack_trace = traceback.format_stack()
+            message = (
+                f"Failed to produce handover transcript for ritual #{ritual_id} and "
+                f"departing validator {departing_participant}: {str(e)}\n{stack_trace}"
+            )
+            self.log.critical(message)
+            return
+
+        async_tx = self._publish_handover_transcript(
+            ritual_id=ritual_id,
+            departing_validator=departing_participant,
+            handover_transcript=handover_transcript,
+        )
+        self.log.debug(
+            f"{self.transacting_power.account[:8]} created a handover transcript for "
+            f"DKG ritual #{ritual_id} and departing validator {departing_participant}."
+        )
+        return async_tx
+
+    def _is_handover_blinded_share_required(self, ritual_id: int) -> bool:
+        """Check whether node needs to post a blind share for handover"""
+
+        # check ritual status from the blockchain
+        dkg_status = self.coordinator_agent.get_ritual_status(ritual_id=ritual_id)
+        if dkg_status != Coordinator.RitualStatus.ACTIVE:
+            self.log.debug(
+                f"ritual #{ritual_id} is not active, handover is not possible; status={dkg_status}."
+            )
+            return False
+
+        handover_request = self.coordinator_agent.get_handover(
+            ritual_id=ritual_id, departing_validator=self.checksum_address
+        )
+
+        if handover_request.departing_validator != self.checksum_address:
+            self.log.debug(
+                f"Handover request for ritual #{ritual_id} is not for this node."
+            )
+            return False
+
+        handover_status = self.coordinator_agent.get_handover_status(
+            ritual_id=ritual_id, departing_validator=self.checksum_address
+        )
+        if (
+            handover_status
+            != Coordinator.HandoverStatus.HANDOVER_AWAITING_BLINDED_SHARE
+        ):
+            self.log.debug(
+                f"ritual #{ritual_id} is not waiting for handover blind share; status={handover_status}."
+            )
+            return False
+
+        return True
+
+    def _produce_blinded_share_for_handover(self, ritual_id: int) -> bytes:
+        if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
+            self.log.debug(
+                f"No action required for handover blinded share for ritual #{ritual_id}"
+            )
+            return
+
+        ritual = self._resolve_ritual(ritual_id)
+        # FIXME: Workaround: add serialized public key to aggregated transcript.
+        # Since we use serde/bincode in rust, we need a metadata field for the public key, which is the field size,
+        # as 8 bytes in little-endian. See ferveo#209
+        public_key_metadata = b"0\x00\x00\x00\x00\x00\x00\x00"
+        transcript = (
+            bytes(ritual.aggregated_transcript)
+            + public_key_metadata
+            + bytes(ritual.public_key)
+        )
+        aggregated_transcript = AggregatedTranscript.from_bytes(transcript)
+        handover = self.coordinator_agent.get_handover(
+            ritual_id=ritual_id,
+            departing_validator=self.checksum_address,
+        )
+        self.log.debug(
+            f"{self.transacting_power.account[:8]} producing a new blinded share "
+            f"for handover at ritual #{ritual_id}."  # and validator index #{handover.share_index}." # TODO: See ferveo#210
+        )
+
+        handover_transcript = HandoverTranscript.from_bytes(bytes(handover.transcript))
+        try:
+            new_aggregate = self.ritual_power.finalize_handover(
+                aggregated_transcript=aggregated_transcript,
+                handover_transcript=handover_transcript,
+            )
+        except Exception as e:
+            stack_trace = traceback.format_stack()
+            self.log.critical(
+                f"Failed to produce blinded share for ritual #{ritual_id}: {str(e)}\n{stack_trace}"
+            )
+            return
+
+        # extract blinded share from aggregate
+        # TODO: This is a temporary workaround to extract the blinded share
+        # See https://github.com/nucypher/nucypher-contracts/issues/400
+        aggregate_bytes = bytes(new_aggregate)
+
+        # TODO: Workaround to find the share index of the current validator. This was supposed to be
+        # in the handover request, but the rust implementation does not expose it. See ferveo#210
+        for v in self._resolve_validators(ritual):
+            if v.address == self.checksum_address:
+                share_index = v.share_index
+                break
+        else:
+            raise ValueError(
+                f"Validator {self.checksum_address} not found in ritual #{ritual_id} providers."
+            )
+        start = 32 + 48 * ritual.threshold + 96 * share_index
+        length = 96
+        blinded_share = aggregate_bytes[start : start + length]
+        return blinded_share
+
+    def _publish_blinded_share_for_handover(
+        self,
+        ritual_id: int,
+        blinded_share: bytes,
+    ) -> AsyncTx:
+        """Publish a handover blinded share to the Coordinator."""
+        blinded_share = bytes(blinded_share)
+        identifier = PhaseId(ritual_id=ritual_id, phase=HANDOVER_AWAITING_BLINDED_SHARE)
+        async_tx_hooks = self._setup_async_hooks(
+            identifier,
+            ritual_id,
+            blinded_share,
+        )
+
+        async_tx = self.coordinator_agent.post_blinded_share_for_handover(
+            ritual_id=ritual_id,
+            blinded_share=blinded_share,
+            transacting_power=self.transacting_power,
+            async_tx_hooks=async_tx_hooks,
+        )
+        self.dkg_storage.store_ritual_phase_async_tx(
+            phase_id=identifier, async_tx=async_tx
+        )
+        return async_tx
+
+    def perform_handover_blinded_share_phase(
+        self, ritual_id: int, **kwargs
+    ) -> Optional[AsyncTx]:
+
+        if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
+            self.log.debug(
+                f"No action required for handover blinded share for ritual #{ritual_id}"
+            )
+            return
+
+        # check if there is a pending tx for this phase
+        async_tx = self.dkg_storage.get_ritual_phase_async_tx(
+            phase_id=PhaseId(ritual_id, HANDOVER_AWAITING_BLINDED_SHARE)
+        )
+        if async_tx:
+            self.log.info(
+                f"Active handover in progress: {self.transacting_power.account} has submitted tx "
+                f"for ritual #{ritual_id}, blinded share phase, (final: {async_tx.final})."
+            )
+            return async_tx
+
+        try:
+            blinded_share = self._produce_blinded_share_for_handover(
+                ritual_id=ritual_id,
+            )
+        except Exception as e:
+            stack_trace = traceback.format_stack()
+            self.log.critical(
+                f"Failed to produce handover blinded share for ritual #{ritual_id}: {e}\n{stack_trace}"
+            )
+            return
+
+        async_tx = self._publish_blinded_share_for_handover(
+            ritual_id=ritual_id,
+            blinded_share=blinded_share,
+        )
+        self.log.debug(
+            f"{self.transacting_power.account[:8]} created a handover blinded share for "
+            f"DKG ritual #{ritual_id}."
+        )
+        return async_tx
+
     def produce_decryption_share(
         self,
         ritual_id: int,
@@ -759,9 +1119,16 @@ class Operator(BaseActor):
     ) -> Union[DecryptionShareSimple, DecryptionSharePrecomputed]:
         ritual = self._resolve_ritual(ritual_id)
         validators = self._resolve_validators(ritual)
-        aggregated_transcript = AggregatedTranscript.from_bytes(
+        # FIXME: Workaround: add serialized public key to aggregated transcript.
+        # Since we use serde/bincode in rust, we need a metadata field for the public key, which is the field size,
+        # as 8 bytes in little-endian. See ferveo#209
+        public_key_metadata = b"0\x00\x00\x00\x00\x00\x00\x00"
+        transcript = (
             bytes(ritual.aggregated_transcript)
+            + public_key_metadata
+            + bytes(ritual.public_key)
         )
+        aggregated_transcript = AggregatedTranscript.from_bytes(transcript)
         decryption_share = self.ritual_power.produce_decryption_share(
             nodes=validators,
             threshold=ritual.threshold,
