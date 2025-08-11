@@ -937,9 +937,13 @@ class Operator(BaseActor):
         departing_participant: ChecksumAddress,
         **kwargs,
     ) -> Optional[AsyncTx]:
-        # clear ritual object and validators since handover modifies ritual
-        self.dkg_storage.clear_active_ritual_object(ritual_id)
-        self.dkg_storage.clear_validators(ritual_id)
+        if not self._is_handover_transcript_required(
+            ritual_id=ritual_id, departing_validator=departing_participant
+        ):
+            self.log.debug(
+                f"No action required for handover transcript for ritual #{ritual_id}"
+            )
+            return None
 
         # check if there is a pending tx for this phase
         async_tx = self.dkg_storage.get_ritual_phase_async_tx(
@@ -951,14 +955,6 @@ class Operator(BaseActor):
                 f"for ritual #{ritual_id}, handover transcript phase, (final: {async_tx.final})."
             )
             return async_tx
-
-        if not self._is_handover_transcript_required(
-            ritual_id=ritual_id, departing_validator=departing_participant
-        ):
-            self.log.debug(
-                f"No action required for handover transcript for ritual #{ritual_id}"
-            )
-            return None
 
         try:
             handover_transcript = self._produce_handover_transcript(
@@ -1076,10 +1072,6 @@ class Operator(BaseActor):
     def perform_handover_blinded_share_phase(
         self, ritual_id: int, **kwargs
     ) -> Optional[AsyncTx]:
-        # clear ritual object and validators since handover modifies ritual
-        self.dkg_storage.clear_active_ritual_object(ritual_id)
-        self.dkg_storage.clear_validators(ritual_id)
-
         if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
             self.log.debug(
                 f"No action required for handover blinded share for ritual #{ritual_id}"
@@ -1124,7 +1116,7 @@ class Operator(BaseActor):
         )
         return async_tx
 
-    def perform_handover_finalization_phase(self, ritual_id: int, **kwargs):
+    def prune_ritual_metadata_due_to_handover(self, ritual_id: int) -> None:
         # clear ritual object and validators since handover modifies ritual
         self.dkg_storage.clear_active_ritual_object(ritual_id)
         self.dkg_storage.clear_validators(ritual_id)
