@@ -572,7 +572,7 @@ def test_decryption_after_handover(
     # at least a threshold of ursulas were successful (concurrency)
     assert int(num_successes) >= ritual.threshold
 
-    # not that handover is completed (clears cache), and there was a
+    # now that handover is completed (clears cache), and there was a
     # successful decryption (populates cache) check that ritual metadata is present again
     nodes_to_check_for_participation_in_decryption = list(cohort)
     nodes_to_check_for_participation_in_decryption.remove(
