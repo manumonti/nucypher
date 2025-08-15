@@ -115,7 +115,6 @@ class ActiveRitualTracker:
             self.contract.events.StartAggregationRound: self.operator.perform_round_2,
             self.contract.events.HandoverRequest: self.operator.perform_handover_transcript_phase,
             self.contract.events.HandoverTranscriptPosted: self.operator.perform_handover_blinded_share_phase,
-            self.contract.events.HandoverFinalized: self.operator.perform_handover_finalization_phase,
         }
 
         self.events = [
@@ -222,9 +221,22 @@ class ActiveRitualTracker:
         handover_events = [
             self.contract.events.HandoverTranscriptPosted,
             self.contract.events.HandoverRequest,
+            self.contract.events.HandoverFinalized,
         ]
         event_type = getattr(self.contract.events, ritual_event.event)
         if event_type in handover_events:
+            # handover modifies existing ritual metadata; so we need to proactively prune it
+            # during handover process and at the end to avoid having any stale metadata
+            # in the cache
+            self.operator.prune_ritual_metadata_due_to_handover(
+                ritual_event.args.ritualId
+            )
+
+            if event_type == self.contract.events.HandoverFinalized:
+                # pruning metadata is sufficient when Handover is finalized;
+                # no further action required
+                return False
+
             is_departing_participant_in_handover = (
                 event_type == self.contract.events.HandoverTranscriptPosted
                 and ritual_event.args.departingParticipant

@@ -414,10 +414,27 @@ def test_encryption_and_decryption_prometheus_metrics():
     )
 
 
+def check_nodes_ritual_metadata(nodes_to_check, ritual_id, should_exist=True):
+    for ursula in nodes_to_check:
+        ritual = ursula.dkg_storage.get_active_ritual(ritual_id)
+        validators = ursula.dkg_storage.get_validators(ritual_id)
+        if should_exist:
+            assert ritual is not None, f"Ritual {ritual_id} object should be in cache"
+            assert (
+                validators is not None
+            ), f"Validators for ritual {ritual_id} should be in cache"
+        else:
+            assert ritual is None, f"Ritual {ritual_id} object should not be in cache"
+            assert (
+                validators is None
+            ), f"Validators for ritual {ritual_id} should not be in cache"
+
+
 def test_handover_request(
     coordinator_agent,
     testerchain,
     ritual_id,
+    cohort,
     supervisor_transacting_power,
     departing_validator,
     incoming_validator,
@@ -425,6 +442,9 @@ def test_handover_request(
     testerchain.tx_machine.start()
 
     print("==================== INITIALIZING HANDOVER ====================")
+    # check that ritual metadata is present in cache
+    check_nodes_ritual_metadata(cohort, ritual_id, should_exist=True)
+
     receipt = coordinator_agent.request_handover(
         ritual_id=ritual_id,
         departing_validator=departing_validator.checksum_address,
@@ -471,6 +491,11 @@ def test_handover_finality(
         assert handover_status != Coordinator.HandoverStatus.HANDOVER_TIMEOUT
         yield clock.advance(interval)
         yield testerchain.time_travel(seconds=1)
+
+    # check that ritual metadata is not present in cache anymore because in the midst of handover
+    check_nodes_ritual_metadata(
+        [*cohort, incoming_validator], ritual_id, should_exist=False
+    )
 
     _receipt = coordinator_agent.finalize_handover(
         ritual_id=ritual_id,
@@ -546,5 +571,25 @@ def test_decryption_after_handover(
     ritual = coordinator_agent.get_ritual(ritual_id)
     # at least a threshold of ursulas were successful (concurrency)
     assert int(num_successes) >= ritual.threshold
+
+    # now that handover is completed (clears cache), and there was a
+    # successful decryption (populates cache) check that ritual metadata is present again
+    nodes_to_check_for_participation_in_decryption = list(cohort)
+    nodes_to_check_for_participation_in_decryption.remove(
+        departing_validator
+    )  # no longer in cohort
+    nodes_to_check_for_participation_in_decryption.append(
+        incoming_validator
+    )  # now part of cohort
+    nodes_to_check_for_participation_in_decryption.remove(
+        node_to_fail
+    )  # in the cohort but will fail to decrypt so cache not populated
+    check_nodes_ritual_metadata(
+        nodes_to_check_for_participation_in_decryption, ritual_id, should_exist=True
+    )
+
+    # this check reinforces that the departing validator did not participate in the decryption
+    check_nodes_ritual_metadata([departing_validator], ritual_id, should_exist=False)
+
     print("===================== DECRYPTION SUCCESSFUL =====================")
     yield

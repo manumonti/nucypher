@@ -115,6 +115,9 @@ def produce_decryption_share(
         derive_share = _VARIANTS[variant]
     except KeyError:
         raise ValueError(f"Invalid variant {variant}")
+
+    # TODO: #3636 - Precomputed variant now requires selected validators, which is not passed here
+    #  However, we never use it in the codebase, so this is not a problem for now.
     share = derive_share(
         # first arg here is intended to be "self" since the method is unbound
         aggregated_transcript,
