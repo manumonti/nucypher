@@ -48,7 +48,14 @@ from nucypher.blockchain.eth.interfaces import (
     BlockchainInterface,
     BlockchainInterfaceFactory,
 )
-from nucypher.blockchain.eth.models import PHASE1, PHASE2, Coordinator, Ferveo
+from nucypher.blockchain.eth.models import (
+    HANDOVER_AWAITING_BLINDED_SHARE,
+    HANDOVER_AWAITING_TRANSCRIPT,
+    PHASE1,
+    PHASE2,
+    Coordinator,
+    Ferveo,
+)
 from nucypher.blockchain.eth.registry import (
     ContractRegistry,
 )
@@ -565,8 +572,8 @@ class CoordinatorAgent(EthereumContractAgent):
     contract_name: str = "Coordinator"
 
     @contract_api(CONTRACT_CALL)
-    def get_timeout(self) -> int:
-        return self.contract.functions.timeout().call()
+    def get_dkg_timeout(self) -> int:
+        return self.contract.functions.dkgTimeout().call()
 
     @contract_api(CONTRACT_CALL)
     def get_ritual_status(self, ritual_id: int) -> int:
@@ -752,6 +759,45 @@ class CoordinatorAgent(EthereumContractAgent):
         result = self.contract.functions.isProviderKeySet(staking_provider).call()
         return result
 
+    @contract_api(CONTRACT_CALL)
+    def get_handover_timeout(self) -> int:
+        return self.contract.functions.handoverTimeout().call()
+
+    @contract_api(CONTRACT_CALL)
+    def get_handover_status(
+        self, ritual_id: int, departing_validator: ChecksumAddress
+    ) -> int:
+        result = self.contract.functions.getHandoverState(
+            ritual_id, departing_validator
+        ).call()
+        return result
+
+    @contract_api(CONTRACT_CALL)
+    def get_handover_key(
+        self, ritual_id: int, departing_validator: ChecksumAddress
+    ) -> bytes:
+        result = self.contract.functions.getHandoverKey(
+            ritual_id, departing_validator
+        ).call()
+        return bytes(result)
+
+    @contract_api(CONTRACT_CALL)
+    def get_handover(
+        self, ritual_id: int, departing_validator: ChecksumAddress
+    ) -> Coordinator.Handover:
+        key = self.get_handover_key(ritual_id, departing_validator)
+        result = self.contract.functions.handovers(key).call()
+        handover = Coordinator.Handover(
+            key=key,
+            departing_validator=ChecksumAddress(departing_validator),
+            init_timestamp=int(result[0]),
+            incoming_validator=ChecksumAddress(result[1]),
+            transcript=bytes(result[2]),
+            decryption_request_pubkey=bytes(result[3]),
+            blinded_share=bytes(result[4]),
+        )
+        return handover
+
     @contract_api(TRANSACTION)
     def set_provider_public_key(
         self, public_key: FerveoPublicKey, transacting_power: TransactingPower
@@ -826,6 +872,104 @@ class CoordinatorAgent(EthereumContractAgent):
             info={"ritual_id": ritual_id, "phase": PHASE2},
         )
         return async_tx
+
+    @contract_api(TRANSACTION)
+    def request_handover(
+        self,
+        ritual_id: int,
+        departing_validator: ChecksumAddress,
+        incoming_validator: ChecksumAddress,
+        transacting_power: TransactingPower,
+    ) -> TxReceipt:
+        contract_function: ContractFunction = self.contract.functions.handoverRequest(
+            ritualId=ritual_id,
+            departingParticipant=departing_validator,
+            incomingParticipant=incoming_validator,
+        )
+        receipt = self.blockchain.send_transaction(
+            contract_function=contract_function, transacting_power=transacting_power
+        )
+        return receipt
+
+    @contract_api(TRANSACTION)
+    def post_handover_transcript(
+        self,
+        ritual_id: int,
+        departing_validator: ChecksumAddress,
+        handover_transcript: bytes,
+        participant_public_key: SessionStaticKey,
+        transacting_power: TransactingPower,
+        async_tx_hooks: BlockchainInterface.AsyncTxHooks,
+    ) -> AsyncTx:
+        contract_function: ContractFunction = (
+            self.contract.functions.postHandoverTranscript(
+                ritualId=ritual_id,
+                departingParticipant=departing_validator,
+                transcript=bytes(handover_transcript),
+                decryptionRequestStaticKey=bytes(participant_public_key),
+            )
+        )
+        async_tx = self.blockchain.send_async_transaction(
+            contract_function=contract_function,
+            gas_estimation_multiplier=1.4,
+            transacting_power=transacting_power,
+            async_tx_hooks=async_tx_hooks,
+            info={"ritual_id": ritual_id, "phase": HANDOVER_AWAITING_TRANSCRIPT},
+        )
+        return async_tx
+
+    @contract_api(TRANSACTION)
+    def post_blinded_share_for_handover(
+        self,
+        ritual_id: int,
+        blinded_share: bytes,
+        transacting_power: TransactingPower,
+        async_tx_hooks: BlockchainInterface.AsyncTxHooks,
+    ) -> AsyncTx:
+        contract_function: ContractFunction = self.contract.functions.postBlindedShare(
+            ritualId=ritual_id,
+            blindedShare=bytes(blinded_share),
+        )
+        async_tx = self.blockchain.send_async_transaction(
+            contract_function=contract_function,
+            gas_estimation_multiplier=1.4,
+            transacting_power=transacting_power,
+            async_tx_hooks=async_tx_hooks,
+            info={"ritual_id": ritual_id, "phase": HANDOVER_AWAITING_BLINDED_SHARE},
+        )
+        return async_tx
+
+    @contract_api(TRANSACTION)
+    def finalize_handover(
+        self,
+        ritual_id: int,
+        departing_validator: ChecksumAddress,
+        transacting_power: TransactingPower,
+    ) -> TxReceipt:
+        contract_function: ContractFunction = self.contract.functions.finalizeHandover(
+            ritualId=ritual_id,
+            departingParticipant=departing_validator,
+        )
+        receipt = self.blockchain.send_transaction(
+            contract_function=contract_function, transacting_power=transacting_power
+        )
+        return receipt
+
+    @contract_api(TRANSACTION)
+    def cancel_handover(
+        self,
+        ritual_id: int,
+        departing_validator: ChecksumAddress,
+        transacting_power: TransactingPower,
+    ) -> TxReceipt:
+        contract_function: ContractFunction = self.contract.functions.cancelHandover(
+            ritualId=ritual_id,
+            departingParticipant=departing_validator,
+        )
+        receipt = self.blockchain.send_transaction(
+            contract_function=contract_function, transacting_power=transacting_power
+        )
+        return receipt
 
     @contract_api(CONTRACT_CALL)
     def get_ritual_id_from_public_key(self, public_key: DkgPublicKey) -> int:

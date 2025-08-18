@@ -13,6 +13,7 @@ from nucypher.blockchain.eth.agents import (
 )
 from nucypher.blockchain.eth.interfaces import BlockchainInterfaceFactory
 from nucypher.blockchain.eth.registry import ContractRegistry, RegistrySourceManager
+from nucypher.crypto.powers import TransactingPower
 from nucypher.utilities.logging import Logger
 from tests.constants import (
     BONUS_TOKENS_FOR_TESTS,
@@ -49,7 +50,8 @@ PENALTY_DURATION = ONE_DAY  # 1 day in seconds
 
 
 # Coordinator
-TIMEOUT = 3600
+DKG_TIMEOUT = 3600
+HANDOVER_TIMEOUT = 1800
 MAX_DKG_SIZE = 8
 FEE_RATE = 1
 
@@ -220,10 +222,12 @@ def coordinator(
     _coordinator = deployer_account.deploy(
         nucypher_dependency.Coordinator,
         taco_child_application.address,
+        DKG_TIMEOUT,
+        HANDOVER_TIMEOUT,
     )
 
     encoded_initializer_function = _coordinator.initialize.encode_input(
-        TIMEOUT, MAX_DKG_SIZE, deployer_account.address
+        MAX_DKG_SIZE, deployer_account.address
     )
     proxy = deployer_account.deploy(
         oz_dependency.TransparentUpgradeableProxy,
@@ -258,6 +262,24 @@ def fee_model(nucypher_dependency, deployer_account, coordinator, ritual_token):
     coordinator.approveFeeModel(contract.address, sender=deployer_account)
 
     return contract
+
+
+@pytest.fixture(scope="module")
+def handover_supervisor(deployer_account, coordinator):
+    coordinator.grantRole(
+        coordinator.HANDOVER_SUPERVISOR_ROLE(),
+        deployer_account.address,
+        sender=deployer_account,
+    )
+    return deployer_account
+
+
+@pytest.fixture(scope="module")
+def supervisor_transacting_power(handover_supervisor, accounts):
+    return TransactingPower(
+        account=handover_supervisor.address,
+        signer=accounts.get_account_signer(handover_supervisor.address),
+    )
 
 
 @pytest.fixture(scope="module")

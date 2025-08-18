@@ -40,9 +40,11 @@ class MockCoordinatorAgent(MockContractAgent):
         START_RITUAL = 0
         START_AGGREGATION_ROUND = 1
 
-    def __init__(self, blockchain: MockBlockchain, max_dkg_size: int = 64, timeout: int = 600):
+    def __init__(
+        self, blockchain: MockBlockchain, max_dkg_size: int = 64, dkg_timeout: int = 600
+    ):
         self.blockchain = blockchain
-        self.timeout = timeout
+        self.dkg_timeout = dkg_timeout
         self.max_dkg_size = max_dkg_size
         # Note that the call to super() is not necessary here
 
@@ -213,8 +215,8 @@ class MockCoordinatorAgent(MockContractAgent):
     def is_provider_public_key_set(self, staking_provider: ChecksumAddress) -> bool:
         return staking_provider in self._participant_keys_history
 
-    def get_timeout(self) -> int:
-        return self.timeout
+    def get_dkg_timeout(self) -> int:
+        return self.dkg_timeout
 
     def number_of_rituals(self) -> int:
         return len(self._rituals)
@@ -254,7 +256,7 @@ class MockCoordinatorAgent(MockContractAgent):
     def get_ritual_status(self, ritual_id: int) -> int:
         ritual = self._rituals[ritual_id]
         timestamp = int(ritual.init_timestamp)
-        deadline = timestamp + self.timeout
+        deadline = timestamp + self.dkg_timeout
         if timestamp == 0:
             return self.RitualStatus.NON_INITIATED
         elif ritual.total_aggregations == ritual.dkg_size:

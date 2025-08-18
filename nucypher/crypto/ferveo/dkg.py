@@ -1,4 +1,4 @@
-from typing import List, Tuple, Union
+from typing import List, Union
 
 from nucypher_core.ferveo import (
     AggregatedTranscript,
@@ -8,6 +8,7 @@ from nucypher_core.ferveo import (
     Dkg,
     DkgPublicKey,
     FerveoVariant,
+    HandoverTranscript,
     Keypair,
     Transcript,
     Validator,
@@ -43,27 +44,46 @@ def _make_dkg(
     return dkg
 
 
-def generate_transcript(*args, **kwargs) -> Transcript:
-    dkg = _make_dkg(*args, **kwargs)
+def generate_transcript(
+    me: Validator,
+    ritual_id: int,
+    shares: int,
+    threshold: int,
+    nodes: List[Validator],
+) -> Transcript:
+    dkg = _make_dkg(
+        me=me, ritual_id=ritual_id, shares=shares, threshold=threshold, nodes=nodes
+    )
     transcript = dkg.generate_transcript()
     return transcript
 
 
-def derive_public_key(*args, **kwargs) -> DkgPublicKey:
-    dkg = _make_dkg(*args, **kwargs)
+def derive_public_key(
+    me: Validator, ritual_id: int, shares: int, threshold: int, nodes: List[Validator]
+) -> DkgPublicKey:
+    dkg = _make_dkg(
+        me=me, ritual_id=ritual_id, shares=shares, threshold=threshold, nodes=nodes
+    )
     return dkg.public_key
 
 
 def aggregate_transcripts(
-    transcripts: List[Tuple[Validator, Transcript]], shares: int, *args, **kwargs
-) -> Tuple[AggregatedTranscript, DkgPublicKey]:
-    validators = [t[0] for t in transcripts]
-    _dkg = _make_dkg(nodes=validators, shares=shares, *args, **kwargs)
-    validator_msgs = [ValidatorMessage(v[0], v[1]) for v in transcripts]
-    pvss_aggregated = _dkg.aggregate_transcripts(validator_msgs)
-    verify_aggregate(pvss_aggregated, shares, validator_msgs)
-    LOGGER.debug(f"derived final DKG key {bytes(_dkg.public_key).hex()[:10]}")
-    return pvss_aggregated, _dkg.public_key
+    me: Validator,
+    ritual_id: int,
+    shares: int,
+    threshold: int,
+    validator_messages: List[ValidatorMessage],
+) -> AggregatedTranscript:
+    nodes = [vm.validator for vm in validator_messages]
+    dkg = _make_dkg(
+        me=me, ritual_id=ritual_id, shares=shares, threshold=threshold, nodes=nodes
+    )
+    pvss_aggregated = dkg.aggregate_transcripts(validator_messages)
+    verify_aggregate(pvss_aggregated, shares, validator_messages)
+    LOGGER.debug(
+        f"derived final DKG key {bytes(pvss_aggregated.public_key).hex()[:10]}"
+    )
+    return pvss_aggregated
 
 
 def verify_aggregate(
@@ -81,15 +101,23 @@ def produce_decryption_share(
     ciphertext_header: CiphertextHeader,
     aad: bytes,
     variant: FerveoVariant,
-    *args, **kwargs
+    me: Validator,
+    ritual_id: int,
+    shares: int,
+    threshold: int,
 ) -> Union[DecryptionShareSimple, DecryptionSharePrecomputed]:
-    dkg = _make_dkg(nodes=nodes, *args, **kwargs)
+    dkg = _make_dkg(
+        me=me, ritual_id=ritual_id, shares=shares, threshold=threshold, nodes=nodes
+    )
     if not all((nodes, aggregated_transcript, keypair, ciphertext_header, aad)):
         raise Exception("missing arguments")  # sanity check
     try:
         derive_share = _VARIANTS[variant]
     except KeyError:
         raise ValueError(f"Invalid variant {variant}")
+
+    # TODO: #3636 - Precomputed variant now requires selected validators, which is not passed here
+    #  However, we never use it in the codebase, so this is not a problem for now.
     share = derive_share(
         # first arg here is intended to be "self" since the method is unbound
         aggregated_transcript,
@@ -99,3 +127,45 @@ def produce_decryption_share(
         keypair
     )
     return share
+
+
+def produce_handover_transcript(
+    nodes: List[Validator],
+    aggregated_transcript: AggregatedTranscript,
+    handover_slot_index: int,
+    keypair: Keypair,
+    ritual_id: int,
+    shares: int,
+    threshold: int,
+) -> HandoverTranscript:
+    if not all((nodes, aggregated_transcript, keypair)):
+        raise Exception("missing arguments")  # sanity check
+
+    dkg = _make_dkg(
+        # TODO: is fixed 0-index fine here? I don't believe it matters
+        me=nodes[0],
+        ritual_id=ritual_id,
+        shares=shares,
+        threshold=threshold,
+        nodes=nodes,
+    )
+    handover_transcript = dkg.generate_handover_transcript(
+        aggregated_transcript,
+        handover_slot_index,
+        keypair,
+    )
+    return handover_transcript
+
+
+def finalize_handover(
+    aggregated_transcript: AggregatedTranscript,
+    handover_transcript: HandoverTranscript,
+    keypair: Keypair,
+) -> HandoverTranscript:
+    if not all((aggregated_transcript, handover_transcript, keypair)):
+        raise Exception("missing arguments")  # sanity check
+
+    new_aggregate = aggregated_transcript.finalize_handover(
+        handover_transcript, keypair
+    )
+    return new_aggregate

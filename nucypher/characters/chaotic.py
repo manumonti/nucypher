@@ -87,37 +87,40 @@ class DKGOmniscient:
             ]
 
             validators = [
-                ferveo.Validator(checksum_addresses[i], keypair.public_key())
+                ferveo.Validator(checksum_addresses[i], keypair.public_key(), i)
                 for i, keypair in enumerate(validator_keypairs)
             ]
 
             # Validators must be sorted by their public key
             validators.sort(key=attrgetter("address"))
 
-            # Each validator generates a transcript which is publicly stored
-            self.transcripts = []
-            for sender in validators:
+            self.validator_messages = []
+            for validator in validators:
                 transcript = dkg.generate_transcript(
                     ritual_id=self.tau,
-                    me=sender,
+                    me=validator,
                     shares=self.shares_num,
                     threshold=self.security_threshold,
                     nodes=validators,
                 )
-                self.transcripts.append((sender, transcript))
+
+                self.validator_messages.append(
+                    dkg.ValidatorMessage(validator, transcript)
+                )
 
             self.dkg = dkg
             self.validators = validators
             self.validator_keypairs = validator_keypairs
 
             # any validator can generate the same aggregated transcript
-            self.server_aggregate, self.dkg_public_key = dkg.aggregate_transcripts(
+            self.server_aggregate = dkg.aggregate_transcripts(
                 ritual_id=self.tau,
                 me=validators[0],
                 shares=self.shares_num,
                 threshold=self.security_threshold,
-                transcripts=self.transcripts,
+                validator_messages=self.validator_messages,
             )
+            self.dkg_public_key = self.server_aggregate.public_key
 
     _dkg_insight = DKGInsight()
 
@@ -167,10 +170,7 @@ class DKGOmniscientDecryptionClient(ThresholdDecryptionClient):
         variant = threshold_decryption_request.variant
 
         # We can obtain the transcripts from the side-channel (deserialize) and aggregate them
-        validator_messages = [
-            ferveo.ValidatorMessage(validator, transcript)
-            for validator, transcript in self._learner._dkg_insight.transcripts
-        ]
+        validator_messages = self._learner._dkg_insight.validator_messages
         aggregate = ferveo.AggregatedTranscript(validator_messages)
         assert aggregate.verify(
             self._learner._dkg_insight.shares_num,
