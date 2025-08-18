@@ -4,6 +4,21 @@ Releases
 
 .. towncrier release notes start
 
+v7.6.0 (2025-08-18)
+-------------------
+
+Features
+~~~~~~~~
+
+- Adds support for supervised handover of key material between TACo nodes. (`#3608 <https://github.com/nucypher/nucypher/issues/3608>`__)
+
+
+Internal Development Tasks
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- `#3628 <https://github.com/nucypher/nucypher/issues/3628>`__, `#3630 <https://github.com/nucypher/nucypher/issues/3630>`__, `#3632 <https://github.com/nucypher/nucypher/issues/3632>`__, `#3633 <https://github.com/nucypher/nucypher/issues/3633>`__, `#3634 <https://github.com/nucypher/nucypher/issues/3634>`__, `#3635 <https://github.com/nucypher/nucypher/issues/3635>`__, `#3637 <https://github.com/nucypher/nucypher/issues/3637>`__
+
+
 v7.5.0 (2025-04-08)
 -------------------
 
