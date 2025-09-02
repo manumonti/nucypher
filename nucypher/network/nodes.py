@@ -510,17 +510,15 @@ class Learner:
         # self.learning_deferred.cancel()  # TODO: The problem here is that there's no way to get a canceller into the LoopingCall.
 
     def handle_learning_errors(self, failure, *args, **kwargs):
-        _exception = failure.value
-        crash_right_now = getattr(_exception, "crash_right_now", False)
+        exception = failure.value
+        crash_right_now = getattr(exception, "crash_right_now", False)
         if self._abort_on_learning_error or crash_right_now:
             reactor.callFromThread(self._crash_gracefully, failure=failure)
             self.log.critical(
                 "Unhandled error during node learning.  Attempting graceful crash."
             )
         else:
-            self.log.warn(
-                f"Unhandled error during node learning: {failure.getTraceback()}"
-            )
+            self.log.warn(f"Unhandled error during node learning: {str(exception)}")
             if not self._learning_task.running:
                 self.start_learning_loop()  # TODO: Consider a single entry point for this with more elegant pause and unpause.  NRN
 
@@ -867,14 +865,12 @@ class Learner:
                 return RELAX
             else:
                 self.log.warn(
-                    f"Unhandled error while learning from {str(current_teacher)} "
-                    f"(hex={bytes(current_teacher.metadata()).hex()}):{e}."
+                    f"Unhandled error while learning from {str(current_teacher)}: {e}."
                 )
                 raise
         except Exception as e:
             self.log.warn(
-                f"Unhandled error while learning from {str(current_teacher)} "
-                f"(hex={bytes(current_teacher.metadata()).hex()}):{e}."
+                f"Unhandled error while learning from {str(current_teacher)}: {e}."
             )  # To track down 2345 / 1698
             raise
         finally:
