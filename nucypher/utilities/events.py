@@ -1,6 +1,6 @@
 """
 Credit to the original authors for making this code example incorporated into this module found here:
-https://web3py.readthedocs.io/en/stable/examples.html#example-code
+https://web3py.readthedocs.io/en/stable/filters.html#example-code
 
 A stateful event scanner for Ethereum-based blockchains using Web3.py.
 
@@ -11,6 +11,7 @@ where events are added wherever the scanner left off.
 import csv
 import datetime
 import json
+import math
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
@@ -19,6 +20,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import maya
 from eth_abi.codec import ABICodec
+from eth_typing import ChecksumAddress
 from eth_utils import encode_hex
 from eth_utils.abi import event_abi_to_log_topic
 from web3 import Web3
@@ -140,18 +142,20 @@ class EventScanner:
         state: EventScannerState,
         events: List,
         min_chunk_scan_size: int = 10,  # 12 s/block = 120 seconds period
-        max_chunk_scan_size: int = 10000,
-        max_request_retries: int = 30,
+        max_chunk_scan_size: int = 1000,
+        max_request_retries: int = 3,
         request_retry_seconds: float = 3.0,
         chain_reorg_rescan_window: int = 0,
+        chunk_size_decrease: float = 0.5,
+        chunk_size_increase=2.0,
     ):
         """
+        :param web3: Web3 instance
         :param contract: Contract
+        :param state: EventScannerState instance that stores what blocks we have scanned
         :param events: List of web3 Event we scan
-        :param filters: Filters passed to get_logs
-        :param max_chunk_scan_size: JSON-RPC API limit in the number of blocks we query. (Recommendation: 10,000 for mainnet, 500,000 for testnets)
-        :param max_request_retries: How many times we try to reattempt a failed JSON-RPC call
-        :param request_retry_seconds: Delay between failed requests to let JSON-RPC server to recover
+        :param min_chunk_scan_size: Minimum number of blocks we try to fetch over JSON-RPC at once
+        :param max_chunk_scan_size: JSON-RPC API limit in the number of blocks we query
         :param chain_reorg_rescan_window: Number of blocks to rescan in case of chain reorganization (to prevent missed blocks)
         """
 
@@ -169,11 +173,13 @@ class EventScanner:
         self.chain_reorg_rescan_window = chain_reorg_rescan_window
 
         # Factor how fast we increase the chunk size if results are found
-        # # (slow down scan after starting to get hits)
-        self.chunk_size_decrease = 0.5
+        # (slow down scan after starting to get hits)
+        if chunk_size_decrease <= 0 or chunk_size_decrease >= 1:
+            raise ValueError("chunk_size_decrease must be between 0 and 1")
+        self.chunk_size_decrease = chunk_size_decrease
 
-        # Factor how was we increase chunk size if no results found
-        self.chunk_size_increase = 2.0
+        # Factor how fast we increase chunk size if no results found
+        self.chunk_size_increase = chunk_size_increase
 
     @property
     def address(self):
@@ -234,20 +240,24 @@ class EventScanner:
             return block_timestamps[block_num]
 
         all_processed = []
-        events = _fetch_events_for_contract(
-            self.web3,
-            self.contract,
-            self.events,
+        events, actual_end_block = _fetch_events_for_contract(
+            web3=self.web3,
+            contract=self.contract,
+            events=self.events,
             from_block=start_block,
             to_block=end_block,
+            max_retries=self.max_request_retries,
+            retry_delay=self.request_retry_seconds,
+            retry_chunk_decrease_factor=self.chunk_size_decrease,
+            logger=self.logger,
         )
 
         for evt in events:
             processed = self.process_event(event=evt, get_block_when=get_block_when)
             all_processed.append(processed)
 
-        end_block_timestamp = get_block_when(end_block)
-        return end_block, end_block_timestamp, all_processed
+        end_block_timestamp = get_block_when(actual_end_block)
+        return actual_end_block, end_block_timestamp, all_processed
 
     def process_event(
         self, event: AttributeDict, get_block_when: Callable[[int], datetime.datetime]
@@ -316,7 +326,7 @@ class EventScanner:
 
         if start_block > end_block:
             raise ValueError(
-                f"start block ({start_block}) is greater than end block ({end_block})"
+                f"Start block ({start_block}) is greater than end block ({end_block})"
             )
 
         current_block = start_block
@@ -349,8 +359,12 @@ class EventScanner:
             last_scan_duration = time.time() - start
             all_processed += new_entries
 
-            # Try to guess how many blocks to fetch over `eth_get_logs` API next time
-            chunk_size = self.estimate_next_chunk_size(chunk_size, len(new_entries))
+            if actual_end_block < estimated_end_block:
+                # use what worked previously
+                chunk_size = actual_end_block - current_block
+            else:
+                # Try to guess how many blocks to fetch over `eth_get_logs` API next time
+                chunk_size = self.estimate_next_chunk_size(chunk_size, len(new_entries))
 
             # Set where the next chunk starts
             current_block = current_end + 1
@@ -360,9 +374,66 @@ class EventScanner:
         return all_processed, total_chunks_scanned
 
 
+def _get_logs(
+    web3,
+    contract_address: ChecksumAddress,
+    topics: List,
+    from_block: int,
+    to_block: int,
+    max_retries: int,
+    retry_delay: float,
+    retry_chunk_decrease_factor: float,
+    logger: Logger,
+) -> Tuple[Iterable, int]:
+    event_filter_params = {
+        "address": contract_address,
+        "topics": [topics],
+        "fromBlock": from_block,
+        "toBlock": to_block,
+    }
+
+    logger.debug(
+        f"Querying eth_getLogs with the following parameters: {event_filter_params}"
+    )
+
+    # Call JSON-RPC API on your Ethereum node.
+    # get_logs() returns raw AttributedDict entries
+    for i in range(max_retries):
+        try:
+            logs = web3.eth.get_logs(event_filter_params)
+            return logs, to_block
+        except Exception as e:
+            logger.warn(
+                f"eth_getLogs API call failed for range {from_block} - {to_block} ({to_block-from_block} blocks) on attempt {i + 1}/{max_retries}: {e}"
+            )
+            if i < max_retries - 1:
+                # update to block since range could be problematic
+                to_block = from_block + math.floor(
+                    (to_block - from_block) * retry_chunk_decrease_factor
+                )
+                event_filter_params["toBlock"] = to_block
+                logger.info(
+                    f"Reducing range to {from_block} - {to_block} ({to_block-from_block} blocks) and retrying in {retry_delay}s"
+                )
+                # pause before retrying
+                time.sleep(retry_delay)
+                continue
+            else:
+                logger.warn("eth_getLogs API call failed, no more retries left")
+                raise
+
+
 def _fetch_events_for_contract(
-    web3, contract, events, from_block: int, to_block: int
-) -> Iterable:
+    web3,
+    contract,
+    events,
+    from_block: int,
+    to_block: int,
+    max_retries: int,
+    retry_delay: float,
+    retry_chunk_decrease_factor: float,
+    logger: Logger,
+) -> Tuple[Iterable, int]:
     """Get events using eth_getLogs API.
 
     This method is detached from any contract instance.
@@ -389,21 +460,18 @@ def _fetch_events_for_contract(
         topics.add(event_topic)
         event_topics_to_abis[event_topic] = event_abi
 
-    event_filter_params = {
-        "address": contract.address,
-        "topics": [list(topics)],
-        "fromBlock": from_block,
-    }
-    if to_block is not None:
-        event_filter_params["toBlock"] = to_block
-
-    logger.debug(
-        f"Querying eth_getLogs with the following parameters: {event_filter_params}"
-    )
-
     # Call JSON-RPC API on your Ethereum node.
-    # get_logs() returns raw AttributedDict entries
-    logs = web3.eth.get_logs(event_filter_params)
+    logs, actual_end_block = _get_logs(
+        web3,
+        contract.address,
+        list(topics),
+        from_block,
+        to_block,
+        max_retries,
+        retry_delay,
+        retry_chunk_decrease_factor,
+        logger,
+    )
 
     # Convert raw binary data to Python proxy objects as described by ABI
     all_events = []
@@ -425,7 +493,7 @@ def _fetch_events_for_contract(
         # Note: This was originally yield,
         # but deferring the timeout exception caused the throttle logic not to work
         all_events.append(evt)
-    return all_events
+    return all_events, actual_end_block
 
 
 class JSONifiedState(EventScannerState):
