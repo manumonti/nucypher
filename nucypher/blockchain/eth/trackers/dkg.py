@@ -68,7 +68,7 @@ class EventScannerTask(SimpleTask):
 class ActiveRitualTracker:
 
     CHAIN_REORG_SCAN_WINDOW = 20
-    MAX_CHUNK_SIZE = 10000
+    MAX_CHUNK_SIZE = 1000
     MIN_CHUNK_SIZE = 60  # 60 blocks @ 2s per block on Polygon = 120s of blocks (somewhat related to interval)
 
     # how often to check/purge for expired cached values - 8hrs?
