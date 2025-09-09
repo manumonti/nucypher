@@ -338,6 +338,7 @@ class EventScanner:
 
         # All processed entries we got on this scan cycle
         all_processed = []
+        chunk_size_decreased = False
 
         while current_block <= end_block:
 
@@ -360,9 +361,10 @@ class EventScanner:
             all_processed += new_entries
 
             if actual_end_block < estimated_end_block:
-                # use what worked previously
+                # original chunk size was too large; use what worked previously
                 chunk_size = actual_end_block - current_block
-            else:
+                chunk_size_decreased = True
+            elif not chunk_size_decreased:
                 # Try to guess how many blocks to fetch over `eth_get_logs` API next time
                 chunk_size = self.estimate_next_chunk_size(chunk_size, len(new_entries))
 
@@ -407,9 +409,11 @@ def _get_logs(
                 f"eth_getLogs API call failed for range {from_block} - {to_block} ({to_block-from_block} blocks) on attempt {i + 1}/{max_retries}: {e}"
             )
             if i < max_retries - 1:
-                # update to block since range could be problematic
-                to_block = from_block + math.floor(
-                    (to_block - from_block) * retry_chunk_decrease_factor
+                # update to block since range could be problematic; don't go lower than 5 blocks
+                to_block = max(
+                    from_block
+                    + math.floor((to_block - from_block) * retry_chunk_decrease_factor),
+                    5,
                 )
                 event_filter_params["toBlock"] = to_block
                 logger.info(
