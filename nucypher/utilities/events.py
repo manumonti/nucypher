@@ -439,22 +439,23 @@ def _get_logs(
         "address": contract_address,
         "topics": [topics],
         "fromBlock": from_block,
-        "toBlock": to_block,
     }
 
-    logger.debug(
-        f"Querying eth_getLogs with the following parameters: {event_filter_params}"
-    )
-
+    to_block_to_use = to_block
     # Call JSON-RPC API on your Ethereum node.
     # get_logs() returns raw AttributedDict entries
     for i in range(max_retries):
         try:
+            # dynamically update toBlock value based on retries etc.
+            event_filter_params["toBlock"] = to_block_to_use
+            logger.debug(
+                f"Querying eth_getLogs with the following parameters: {event_filter_params}"
+            )
             logs = web3.eth.get_logs(event_filter_params)
-            return logs, to_block
+            return logs, to_block_to_use
         except HTTPError as http_error:
             logger.warn(
-                f"eth_getLogs API call failed for range {from_block} - {to_block} ({to_block-from_block} blocks) on attempt {i + 1}/{max_retries}: {http_error}"
+                f"eth_getLogs API call failed for range {from_block} - {to_block_to_use} ({to_block_to_use-from_block} blocks) on attempt {i + 1}/{max_retries}: {http_error}"
             )
 
             # Assumption: the reason for http error is fetching too many blocks
@@ -473,24 +474,23 @@ def _get_logs(
                     raise http_error
 
                 # Update to_block and directly set range since alchemy free tier
-                to_block = (
+                to_block_to_use = (
                     from_block + ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS
                 )  # alchemy free tier max
-                event_filter_params["toBlock"] = to_block
                 logger.warn(
-                    f"Alchemy free tier detected. Retrying with range {from_block} - {to_block} ({to_block - from_block} blocks)"
+                    f"Alchemy free tier detected. Retrying with range {from_block} - {to_block_to_use} ({to_block_to_use - from_block} blocks)"
                 )
             else:
                 # reducing the chunk size by a factor
                 # (we assume the original chunk size was too large)
-                to_block = max(
-                    from_block
-                    + math.floor((to_block - from_block) * retry_chunk_decrease_factor),
+                to_block_to_use = from_block + max(
+                    math.floor(
+                        (to_block_to_use - from_block) * retry_chunk_decrease_factor
+                    ),
                     MIN_CHUNK_NUM_BLOCKS,
                 )
-                event_filter_params["toBlock"] = to_block
                 logger.warn(
-                    f"Reducing range to {from_block} - {to_block} ({to_block-from_block} blocks) and retrying in {retry_delay}s"
+                    f"Reducing range to {from_block} - {to_block_to_use} ({to_block_to_use-from_block} blocks) and retrying in {retry_delay}s"
                 )
                 # pause before retrying
                 time.sleep(retry_delay)

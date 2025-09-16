@@ -1,3 +1,5 @@
+import copy
+import json
 import math
 import time
 from datetime import datetime, timezone
@@ -5,14 +7,19 @@ from typing import Tuple
 from unittest.mock import MagicMock, Mock
 
 import pytest
+import requests
+from requests import HTTPError
 
 from nucypher.blockchain.eth.trackers.dkg import ActiveRitualTracker, EventScannerTask
 from nucypher.utilities.events import (
+    ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS,
     MAX_CHUNK_NUM_BLOCKS,
     MIN_CHUNK_NUM_BLOCKS,
     EventScanner,
     EventScannerState,
     JSONifiedState,
+    _get_logs,
+    is_alchemy_free_tier,
 )
 
 CHAIN_REORG_WINDOW = ActiveRitualTracker.CHAIN_REORG_SCAN_WINDOW
@@ -322,3 +329,289 @@ def test_event_scanner_task():
 
     assert task.interval == EventScannerTask.INTERVAL
     assert task.scanner == scanner.scan
+
+
+ALCHEMY_FREE_TIER_RESPONSE_DICT = {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "error": {
+        "code": -32600,
+        "message": "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Based on your parameters, this block range should work: [0x48af181, 0x48af18a]. Upgrade to PAYG for expanded block range.",
+    },
+}
+
+
+def test_is_alchemy_free_tier(mocker):
+    web3 = mocker.Mock()
+
+    http_error = mocker.Mock(spec=HTTPError)
+    http_error.response = mocker.Mock()
+    http_error.response.json.return_value = ALCHEMY_FREE_TIER_RESPONSE_DICT
+
+    # endpoint does not include 'alchemy'
+    web3.provider.endpoint_uri = "https://polygon-mainnet.infura.io/v3/1234567890abcdef"
+    assert is_alchemy_free_tier(web3, http_error) is False
+    web3.provider.endpoint_uri = (
+        "https://polygon-mainnet.g.alchemy.com/v2/1234567890abcdef"  # correct endpoint
+    )
+
+    # response is not 400
+    for error_code in [200, 300, 404, 500]:
+        http_error.response.status_code = error_code
+        assert is_alchemy_free_tier(web3, http_error) is False
+    http_error.response.status_code = 400  # correct code
+
+    # json raises error
+    # http_error.response.json.side_effect = ValueError("some error")
+    # assert is_alchemy_free_tier(web3, http_error) is False
+
+    # response json does not have error
+    http_error.response.json.return_value = {"some": "other"}
+    assert is_alchemy_free_tier(web3, http_error) is False
+
+    # message is not about alchemy free tier
+    not_about_free_tier = copy.deepcopy(ALCHEMY_FREE_TIER_RESPONSE_DICT)
+    not_about_free_tier["error"]["message"] = "some other message"
+    http_error.response.json.return_value = not_about_free_tier
+    assert is_alchemy_free_tier(web3, http_error) is False
+
+    # message does not have correct error code
+    incorrect_error_code = copy.deepcopy(ALCHEMY_FREE_TIER_RESPONSE_DICT)
+    incorrect_error_code["error"]["code"] = -3200
+    http_error.response.json.return_value = incorrect_error_code
+    assert is_alchemy_free_tier(web3, http_error) is False
+
+    # ok - alchemy free tier
+    http_error.response.json.return_value = copy.deepcopy(
+        ALCHEMY_FREE_TIER_RESPONSE_DICT
+    )
+    assert is_alchemy_free_tier(web3, http_error) is True
+
+
+def test_get_logs_alchemy_free_tier(mocker, get_random_checksum_address):
+    web3 = mocker.Mock()
+    web3.eth = mocker.Mock()
+    web3.provider.endpoint_uri = (
+        "https://polygon-mainnet.g.alchemy.com/v2/1234567890abcdef"
+    )
+
+    # configure for alchemy free tier error
+    bad_request_response = requests.Response()
+    bad_request_response.status_code = 400
+    bad_request_response._content = json.dumps(ALCHEMY_FREE_TIER_RESPONSE_DICT).encode(
+        "utf-8"
+    )
+    http_error = requests.HTTPError("my error", response=bad_request_response)
+
+    web3.eth.get_logs.side_effect = [
+        http_error,
+        [],
+    ]  # first call raises error, second returns empty list
+    contract_address = get_random_checksum_address()
+    topics = []
+    from_block = 100
+    to_block = 200
+    max_retries = 3
+    retry_delay = 0.1
+    retry_chunk_decrease_factor = 0.5
+    logger = mocker.Mock()
+
+    get_logs_spy = mocker.spy(web3.eth, "get_logs")
+    events, actual_end_block = _get_logs(
+        web3,
+        contract_address,
+        topics,
+        from_block,
+        to_block,
+        max_retries,
+        retry_delay,
+        retry_chunk_decrease_factor,
+        logger,
+    )
+
+    assert events == []
+    assert get_logs_spy.call_count == 2  # first raises error, second returns empty list
+    assert (
+        actual_end_block == from_block + ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS
+    )  # only alchemy free tier max chunk size was scanned
+
+
+def test_get_logs_not_alchemy_free_tier(mocker, get_random_checksum_address):
+    web3 = mocker.Mock()
+    web3.eth = mocker.Mock()
+    web3.provider.endpoint_uri = "https://polygon-mainnet.infura.io/v3/1234567890abcdef"
+
+    # configure for alchemy free tier error
+    bad_request_response = requests.Response()
+    bad_request_response.status_code = 400
+    bad_request_response._content = b"not a free tier error"
+    http_error = requests.HTTPError("my error", response=bad_request_response)
+
+    contract_address = get_random_checksum_address()
+    topics = []
+    max_retries = 3
+    retry_delay = 0.1
+    retry_chunk_decrease_factor = 0.5
+    logger = mocker.Mock()
+
+    get_logs_spy = mocker.spy(web3.eth, "get_logs")
+
+    from_block = 100
+    to_block = 228  # need a number here where (to_block - from_block) is a power of 2 to make the math easier
+
+    # no decreases
+    web3.eth.get_logs.side_effect = [[]]  # everything works, returns empty list
+    events, actual_end_block = _get_logs(
+        web3,
+        contract_address,
+        topics,
+        from_block,
+        to_block,
+        max_retries,
+        retry_delay,
+        retry_chunk_decrease_factor,
+        logger,
+    )
+    assert get_logs_spy.call_count == 1
+    assert events == []
+    assert actual_end_block == to_block
+    get_logs_spy.assert_called_with(
+        {
+            "fromBlock": from_block,
+            "toBlock": to_block,
+            "address": contract_address,
+            "topics": [topics],
+        }
+    )
+
+    # chunk size decreased by factor 1x
+    web3.eth.get_logs.side_effect = [
+        http_error,
+        [],
+    ]  # first call raises error, second returns empty list
+    get_logs_spy.reset_mock()
+    events, actual_end_block = _get_logs(
+        web3,
+        contract_address,
+        topics,
+        from_block,
+        to_block,
+        max_retries,
+        retry_delay,
+        retry_chunk_decrease_factor,
+        logger,
+    )
+    assert get_logs_spy.call_count == 2
+    assert events == []
+    assert actual_end_block == from_block + math.floor(
+        (to_block - from_block) * retry_chunk_decrease_factor
+    )  # chunk size decreased once
+    get_logs_spy.assert_called_with(
+        {
+            "fromBlock": from_block,
+            "toBlock": actual_end_block,
+            "address": contract_address,
+            "topics": [topics],
+        }
+    )
+
+    # chunk size decreased by factor 2x
+    web3.eth.get_logs.side_effect = [
+        http_error,
+        http_error,
+        [],
+    ]  # first two calls raises error, third returns empty list
+    get_logs_spy.reset_mock()
+    events, actual_end_block = _get_logs(
+        web3,
+        contract_address,
+        topics,
+        from_block,
+        to_block,
+        max_retries,
+        retry_delay,
+        retry_chunk_decrease_factor,
+        logger,
+    )
+    assert get_logs_spy.call_count == 3
+    assert events == []
+    assert actual_end_block == from_block + math.floor(
+        (to_block - from_block)
+        * retry_chunk_decrease_factor
+        * retry_chunk_decrease_factor
+    )  # chunk size decreased twice
+    get_logs_spy.assert_called_with(
+        {
+            "fromBlock": from_block,
+            "toBlock": actual_end_block,
+            "address": contract_address,
+            "topics": [topics],
+        }
+    )
+
+    # >= max retries - so only two decreases
+    web3.eth.get_logs.side_effect = [
+        http_error,
+        http_error,
+        http_error,
+    ]  # first three calls raises error which exceeds number of retries
+    get_logs_spy.reset_mock()
+    with pytest.raises(HTTPError, match="my error"):
+        _ = _get_logs(
+            web3,
+            contract_address,
+            topics,
+            from_block,
+            to_block,
+            max_retries,
+            retry_delay,
+            retry_chunk_decrease_factor,
+            logger,
+        )
+    assert get_logs_spy.call_count == 3  # first raises error, second returns empty list
+    actual_end_block = from_block + math.floor(
+        (to_block - from_block)
+        * retry_chunk_decrease_factor
+        * retry_chunk_decrease_factor
+    )
+    get_logs_spy.assert_called_with(
+        {
+            "fromBlock": from_block,
+            "toBlock": actual_end_block,
+            "address": contract_address,
+            "topics": [topics],
+        }
+    )
+
+    # chunk size decrease 2x - BUT final decrease would go below from_block, so should stop at from_block
+    to_block = (
+        from_block + (MIN_CHUNK_NUM_BLOCKS - 2) * 2**2
+    )  # 2 decreases will go below MIN_CHUNK_NUM_BLOCKS
+    web3.eth.get_logs.side_effect = [
+        http_error,
+        http_error,
+        [],
+    ]  # first two calls raise exception but last call uses MIN_CHUNK_NUM_BLOCKS instead of lower value from calc
+    get_logs_spy.reset_mock()
+    events, actual_end_block = _get_logs(
+        web3,
+        contract_address,
+        topics,
+        from_block,
+        to_block,
+        max_retries,
+        retry_delay,
+        retry_chunk_decrease_factor,
+        logger,
+    )
+    assert get_logs_spy.call_count == 3
+    assert events == []
+    assert actual_end_block == from_block + MIN_CHUNK_NUM_BLOCKS
+    get_logs_spy.assert_called_with(
+        {
+            "fromBlock": from_block,
+            "toBlock": actual_end_block,
+            "address": contract_address,
+            "topics": [topics],
+        }
+    )
