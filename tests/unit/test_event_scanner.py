@@ -7,9 +7,37 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from nucypher.blockchain.eth.trackers.dkg import ActiveRitualTracker, EventScannerTask
-from nucypher.utilities.events import EventScanner, EventScannerState, JSONifiedState
+from nucypher.utilities.events import (
+    MAX_CHUNK_NUM_BLOCKS,
+    MIN_CHUNK_NUM_BLOCKS,
+    EventScanner,
+    EventScannerState,
+    JSONifiedState,
+)
 
 CHAIN_REORG_WINDOW = ActiveRitualTracker.CHAIN_REORG_SCAN_WINDOW
+
+
+def test_min_scan_chunk_size_enforcement():
+    with pytest.raises(ValueError, match="Min scan chunk size must be at least"):
+        _ = EventScanner(
+            web3=Mock(),
+            contract=Mock(),
+            state=Mock(),
+            events=[],
+            min_chunk_scan_size=MIN_CHUNK_NUM_BLOCKS - 1,
+        )
+
+
+def test_max_scan_chunk_size_enforcement():
+    with pytest.raises(ValueError, match="Max scan chunk size must be at most"):
+        _ = EventScanner(
+            web3=Mock(),
+            contract=Mock(),
+            state=Mock(),
+            events=[],
+            max_chunk_scan_size=MAX_CHUNK_NUM_BLOCKS + 1,
+        )
 
 
 def test_estimate_next_chunk_size():
@@ -137,7 +165,7 @@ def test_scan_invalid_start_end_block():
         scanner.scan(start_block=11, end_block=10)
 
 
-@pytest.mark.parametrize("chunk_size", [1, 3, 5, 7, 10])
+@pytest.mark.parametrize("chunk_size", [11, 13, 15, 17, 20])
 def test_scan_when_events_always_found(chunk_size):
     state = JSONifiedState(persistent=False)
     state.reset()  # TODO why is this needed if persistent is False
@@ -167,7 +195,7 @@ def test_scan_when_events_always_found(chunk_size):
     assert scanner.get_suggested_scan_start_block() == (end_block - CHAIN_REORG_WINDOW)
 
 
-@pytest.mark.parametrize("chunk_size", [2, 6, 7, 11, 15, 30])
+@pytest.mark.parametrize("chunk_size", [12, 16, 17, 21, 25, 30])
 def test_scan_when_events_never_found(chunk_size):
     state = JSONifiedState(persistent=False)
     state.reset()  # TODO why is this needed if persistent is False
@@ -209,8 +237,8 @@ def test_scan_when_events_never_found_super_large_chunk_sizes():
     start_block = 0
     end_block = 1320000
 
-    min_chunk_size = 200
-    max_chunk_size = 10000
+    min_chunk_size = 150
+    max_chunk_size = MAX_CHUNK_NUM_BLOCKS
 
     scanner = MyEventScanner(
         web3=Mock(),

@@ -42,6 +42,13 @@ from nucypher.config.constants import (
 )
 from nucypher.utilities.logging import Logger
 
+ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS = os.environ.get(
+    NUCYPHER_ENVVAR_ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS, 9
+)  # they say 10, but it's really < 10
+# some reasonable minimum below alchemy free tier; we don't actually want this too low
+MIN_CHUNK_NUM_BLOCKS = os.environ.get(NUCYPHER_ENVVAR_MIN_CHUNK_NUM_BLOCKS, 9)
+MAX_CHUNK_NUM_BLOCKS = os.environ.get(NUCYPHER_ENVVAR_MAX_CHUNK_NUM_BLOCKS, 1000)
+
 
 def generate_events_csv_filepath(contract_name: str, event_name: str) -> Path:
     return Path(f'{contract_name}_{event_name}_{maya.now().datetime().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
@@ -100,13 +107,6 @@ def is_alchemy_free_tier(web3: Web3, http_error: HTTPError) -> bool:
         )
     except (ValueError, KeyError):
         return False
-
-
-ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS = os.environ.get(
-    NUCYPHER_ENVVAR_ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS, 9
-)  # they say 10, but it's really < 10
-MIN_CHUNK_NUM_BLOCKS = os.environ.get(NUCYPHER_ENVVAR_MIN_CHUNK_NUM_BLOCKS, 8)
-MAX_CHUNK_NUM_BLOCKS = os.environ.get(NUCYPHER_ENVVAR_MAX_CHUNK_NUM_BLOCKS, 1000)
 
 
 logger = Logger("events")
@@ -179,8 +179,8 @@ class EventScanner:
         contract: Contract,
         state: EventScannerState,
         events: List,
-        min_chunk_scan_size: int = 10,  # 12 s/block = 120 seconds period
-        max_chunk_scan_size: int = 1000,
+        min_chunk_scan_size: int = MIN_CHUNK_NUM_BLOCKS,
+        max_chunk_scan_size: int = MAX_CHUNK_NUM_BLOCKS,
         max_request_retries: int = 3,
         request_retry_seconds: float = 3.0,
         chain_reorg_rescan_window: int = 0,
@@ -205,7 +205,17 @@ class EventScanner:
 
         # Our JSON-RPC throttling parameters
         self.min_scan_chunk_size = min_chunk_scan_size
+        if self.min_scan_chunk_size < MIN_CHUNK_NUM_BLOCKS:
+            raise ValueError(
+                f"Min scan chunk size must be at least {MIN_CHUNK_NUM_BLOCKS}"
+            )
+
         self.max_scan_chunk_size = max_chunk_scan_size
+        if self.max_scan_chunk_size > MAX_CHUNK_NUM_BLOCKS:
+            raise ValueError(
+                f"Max scan chunk size must be at most {MAX_CHUNK_NUM_BLOCKS}"
+            )
+
         self.max_request_retries = max_request_retries
         self.request_retry_seconds = request_retry_seconds
         self.chain_reorg_rescan_window = chain_reorg_rescan_window
