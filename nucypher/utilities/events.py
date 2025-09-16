@@ -12,9 +12,11 @@ import csv
 import datetime
 import json
 import math
+import os
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from http import HTTPStatus
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -23,6 +25,7 @@ from eth_abi.codec import ABICodec
 from eth_typing import ChecksumAddress
 from eth_utils import encode_hex
 from eth_utils.abi import event_abi_to_log_topic
+from requests import HTTPError
 from web3 import Web3
 from web3._utils.events import get_event_data
 from web3.contract.contract import Contract
@@ -32,6 +35,11 @@ from web3.types import BlockIdentifier
 
 from nucypher.blockchain.eth.agents import EthereumContractAgent
 from nucypher.blockchain.eth.events import EventRecord
+from nucypher.config.constants import (
+    NUCYPHER_ENVVAR_ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS,
+    NUCYPHER_ENVVAR_MAX_CHUNK_NUM_BLOCKS,
+    NUCYPHER_ENVVAR_MIN_CHUNK_NUM_BLOCKS,
+)
 from nucypher.utilities.logging import Logger
 
 
@@ -69,6 +77,36 @@ def write_events_to_csv_file(csv_file: Path,
                 events_writer.writeheader()
             events_writer.writerow(event_row)
     return True
+
+
+def is_alchemy_free_tier(web3: Web3, http_error: HTTPError) -> bool:
+    try:
+        # very specific error case
+        rpc_response = http_error.response.json()
+        is_http_400 = http_error.response.status_code == HTTPStatus.BAD_REQUEST
+        is_alchemy_provider = "alchemy" in getattr(web3.provider, "endpoint_uri", "")
+        is_rpc_response_error = "error" in rpc_response
+        is_alchemy_free_tier_error = "Free tier" in rpc_response["error"]["message"]
+        is_rpc_bad_request = rpc_response["error"]["code"] == -32600
+
+        return all(
+            [
+                is_http_400,
+                is_alchemy_provider,
+                is_rpc_response_error,
+                is_alchemy_free_tier_error,
+                is_rpc_bad_request,
+            ]
+        )
+    except (ValueError, KeyError):
+        return False
+
+
+ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS = os.environ.get(
+    NUCYPHER_ENVVAR_ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS, 9
+)  # they say 10, but it's really < 10
+MIN_CHUNK_NUM_BLOCKS = os.environ.get(NUCYPHER_ENVVAR_MIN_CHUNK_NUM_BLOCKS, 8)
+MAX_CHUNK_NUM_BLOCKS = os.environ.get(NUCYPHER_ENVVAR_MAX_CHUNK_NUM_BLOCKS, 1000)
 
 
 logger = Logger("events")
@@ -377,7 +415,7 @@ class EventScanner:
 
 
 def _get_logs(
-    web3,
+    web3: Web3,
     contract_address: ChecksumAddress,
     topics: List,
     from_block: int,
@@ -404,27 +442,48 @@ def _get_logs(
         try:
             logs = web3.eth.get_logs(event_filter_params)
             return logs, to_block
-        except Exception as e:
+        except HTTPError as http_error:
             logger.warn(
-                f"eth_getLogs API call failed for range {from_block} - {to_block} ({to_block-from_block} blocks) on attempt {i + 1}/{max_retries}: {e}"
+                f"eth_getLogs API call failed for range {from_block} - {to_block} ({to_block-from_block} blocks) on attempt {i + 1}/{max_retries}: {http_error}"
             )
-            if i < max_retries - 1:
-                # update to block since range could be problematic; don't go lower than 5 blocks
+
+            # Assumption: the reason for http error is fetching too many blocks
+            if i >= max_retries - 1:
+                # no more retries left
+                logger.warn("eth_getLogs API call failed, no more retries left")
+                raise http_error
+
+            # update to_block since range could be problematic; don't go lower than min blocks
+            if is_alchemy_free_tier(web3, http_error):
+                if i > 0:
+                    # we already reduced the chunk size for Alchemy, but it did not help
+                    logger.warn(
+                        "Alchemy free tier reduction was unsuccessful, retrying will not help"
+                    )
+                    raise http_error
+
+                # Update to_block and directly set range since alchemy free tier
+                to_block = (
+                    from_block + ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS
+                )  # alchemy free tier max
+                event_filter_params["toBlock"] = to_block
+                logger.warn(
+                    f"Alchemy free tier detected. Retrying with range {from_block} - {to_block} ({to_block - from_block} blocks)"
+                )
+            else:
+                # reducing the chunk size by a factor
+                # (we assume the original chunk size was too large)
                 to_block = max(
                     from_block
                     + math.floor((to_block - from_block) * retry_chunk_decrease_factor),
-                    5,
+                    MIN_CHUNK_NUM_BLOCKS,
                 )
                 event_filter_params["toBlock"] = to_block
-                logger.info(
+                logger.warn(
                     f"Reducing range to {from_block} - {to_block} ({to_block-from_block} blocks) and retrying in {retry_delay}s"
                 )
                 # pause before retrying
                 time.sleep(retry_delay)
-                continue
-            else:
-                logger.warn("eth_getLogs API call failed, no more retries left")
-                raise
 
 
 def _fetch_events_for_contract(
