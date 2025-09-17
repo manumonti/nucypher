@@ -616,3 +616,44 @@ def test_get_logs_not_alchemy_free_tier(mocker, get_random_checksum_address):
             "topics": [topics],
         }
     )
+
+
+def test_get_logs_connection_error(mocker, get_random_checksum_address):
+    web3 = mocker.Mock()
+    web3.eth = mocker.Mock()
+    web3.provider.endpoint_uri = (
+        "https://polygon-mainnet.g.alchemy.com/v2/1234567890abcdef"
+    )
+
+    # configure for endpoint's server error
+    bad_request_response = requests.Response()
+    bad_request_response.status_code = 502  # Bad Gateway error
+    http_error = requests.HTTPError("my error", response=bad_request_response)
+
+    max_retries = 10
+
+    web3.eth.get_logs.side_effect = http_error
+    contract_address = get_random_checksum_address()
+    topics = []
+    from_block = 100
+    to_block = 200
+    max_retries = max_retries
+    retry_delay = 0.1
+    retry_chunk_decrease_factor = 0.5
+    logger = mocker.Mock()
+
+    get_logs_spy = mocker.spy(web3.eth, "get_logs")
+
+    with pytest.raises(HTTPError, match="my error"):
+        _get_logs(
+            web3,
+            contract_address,
+            topics,
+            from_block,
+            to_block,
+            max_retries,
+            retry_delay,
+            retry_chunk_decrease_factor,
+            logger,
+        )
+    assert get_logs_spy.call_count == max_retries
