@@ -453,7 +453,7 @@ def _get_logs(
     to_block_to_use = to_block
     # Call JSON-RPC API on your Ethereum node.
     # get_logs() returns raw AttributedDict entries
-    for i in range(max_retries):
+    for attempt in range(max_retries):
         try:
             # dynamically update toBlock value based on retries etc.
             event_filter_params["toBlock"] = to_block_to_use
@@ -464,18 +464,18 @@ def _get_logs(
             return logs, to_block_to_use
         except HTTPError as http_error:
             logger.warn(
-                f"eth_getLogs API call failed for range {from_block} - {to_block_to_use} ({to_block_to_use - from_block} blocks) on attempt {i + 1}/{max_retries}: {http_error}"
+                f"eth_getLogs API call failed for range {from_block} - {to_block_to_use} ({to_block_to_use - from_block} blocks) on attempt {attempt + 1}/{max_retries}: {http_error}"
             )
 
             # Assumption: the reason for http error is fetching too many blocks
-            if i >= max_retries - 1:
+            if attempt >= max_retries - 1:
                 # no more retries left
                 logger.warn("eth_getLogs API call failed, no more retries left")
                 raise http_error
 
             # update to_block since range could be problematic; don't go lower than min blocks
             if is_alchemy_free_tier(web3, http_error):
-                if i > 0:
+                if attempt > 0:
                     # we already reduced the chunk size for Alchemy, but it did not help
                     logger.warn(
                         "Alchemy free tier reduction was unsuccessful, retrying will not help"
