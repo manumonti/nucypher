@@ -298,7 +298,7 @@ class MyEventScanner(EventScanner):
         target_end_block: int,
         return_event_for_scan_chunk: bool = True,
         *args,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.target_end_block = target_end_block

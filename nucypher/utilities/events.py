@@ -51,33 +51,39 @@ MAX_CHUNK_NUM_BLOCKS = os.environ.get(NUCYPHER_ENVVAR_MAX_CHUNK_NUM_BLOCKS, 1000
 
 
 def generate_events_csv_filepath(contract_name: str, event_name: str) -> Path:
-    return Path(f'{contract_name}_{event_name}_{maya.now().datetime().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
+    return Path(
+        f"{contract_name}_{event_name}_{maya.now().datetime().strftime('%Y-%m-%d_%H-%M-%S')}.csv"
+    )
 
 
-def write_events_to_csv_file(csv_file: Path,
-                             agent: EthereumContractAgent,
-                             event_name: str,
-                             argument_filters: Dict = None,
-                             from_block: Optional[BlockIdentifier] = 0,
-                             to_block: Optional[BlockIdentifier] = 'latest') -> bool:
+def write_events_to_csv_file(
+    csv_file: Path,
+    agent: EthereumContractAgent,
+    event_name: str,
+    argument_filters: Dict = None,
+    from_block: Optional[BlockIdentifier] = 0,
+    to_block: Optional[BlockIdentifier] = "latest",
+) -> bool:
     """
     Write events to csv file.
     :return: True if data written to file, False if there was no event data to write
     """
     event_type = agent.contract.events[event_name]
-    entries = event_type.get_logs(fromBlock=from_block, toBlock=to_block, argument_filters=argument_filters)
+    entries = event_type.get_logs(
+        fromBlock=from_block, toBlock=to_block, argument_filters=argument_filters
+    )
     if not entries:
         return False
 
-    with open(csv_file, mode='w') as events_file:
+    with open(csv_file, mode="w") as events_file:
         events_writer = None
         for event_record in entries:
             event_record = EventRecord(event_record)
             event_row = OrderedDict()
-            event_row['event_name'] = event_name
-            event_row['block_number'] = event_record.block_number
-            event_row['unix_timestamp'] = event_record.timestamp
-            event_row['date'] = maya.MayaDT(event_record.timestamp).iso8601()
+            event_row["event_name"] = event_name
+            event_row["block_number"] = event_record.block_number
+            event_row["unix_timestamp"] = event_record.timestamp
+            event_row["date"] = maya.MayaDT(event_record.timestamp).iso8601()
             event_row.update(dict(event_record.args.items()))
             if events_writer is None:
                 events_writer = csv.DictWriter(events_file, fieldnames=event_row.keys())
@@ -311,7 +317,9 @@ class EventScanner:
         self, event: AttributeDict, get_block_when: Callable[[int], datetime.datetime]
     ):
         """Process events and update internal state"""
-        idx = event["logIndex"]  # Integer of the log index position in the block, null when its pending
+        idx = event[
+            "logIndex"
+        ]  # Integer of the log index position in the block, null when its pending
 
         # We cannot avoid minor chain reorganisations, but
         # at least we must avoid blocks that are not mined yet
@@ -389,7 +397,6 @@ class EventScanner:
         chunk_size_decreased = False
 
         while current_block <= end_block:
-
             self.state.start_chunk(current_block)
 
             estimated_end_block = min(
@@ -400,7 +407,9 @@ class EventScanner:
             )
 
             start = time.time()
-            actual_end_block, end_block_timestamp, new_entries = self.scan_chunk(current_block, estimated_end_block)
+            actual_end_block, end_block_timestamp, new_entries = self.scan_chunk(
+                current_block, estimated_end_block
+            )
 
             # Where does our current chunk scan ends - are we out of chain yet?
             current_end = actual_end_block
@@ -455,7 +464,7 @@ def _get_logs(
             return logs, to_block_to_use
         except HTTPError as http_error:
             logger.warn(
-                f"eth_getLogs API call failed for range {from_block} - {to_block_to_use} ({to_block_to_use-from_block} blocks) on attempt {i + 1}/{max_retries}: {http_error}"
+                f"eth_getLogs API call failed for range {from_block} - {to_block_to_use} ({to_block_to_use - from_block} blocks) on attempt {i + 1}/{max_retries}: {http_error}"
             )
 
             # Assumption: the reason for http error is fetching too many blocks
@@ -490,7 +499,7 @@ def _get_logs(
                     MIN_CHUNK_NUM_BLOCKS,
                 )
                 logger.warn(
-                    f"Reducing range to {from_block} - {to_block_to_use} ({to_block_to_use-from_block} blocks) and retrying in {retry_delay}s"
+                    f"Reducing range to {from_block} - {to_block_to_use} ({to_block_to_use - from_block} blocks) and retrying in {retry_delay}s"
                 )
                 # pause before retrying
                 time.sleep(retry_delay)
@@ -596,7 +605,9 @@ class JSONifiedState(EventScannerState):
         """Restore the last scan state from a file."""
         try:
             self.state = json.load(open(self.fname, "rt"))
-            print(f"Restored the state, previously {self.state['last_scanned_block']} blocks have been scanned")
+            print(
+                f"Restored the state, previously {self.state['last_scanned_block']} blocks have been scanned"
+            )
         except (IOError, json.decoder.JSONDecodeError):
             print("State starting from scratch")
             self.reset()
@@ -639,7 +650,7 @@ class JSONifiedState(EventScannerState):
         # One transaction may contain multiple events
         # and each one of those gets their own log index
 
-        event_name = event.event # "Transfer"
+        event_name = event.event  # "Transfer"
         log_index = event.logIndex  # Log index within the block
         transaction_index = event.transactionIndex  # Transaction index within the block
         txhash = event.transactionHash.hex()  # Transaction hash
