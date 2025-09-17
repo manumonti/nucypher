@@ -362,8 +362,9 @@ def test_is_alchemy_free_tier(mocker):
     http_error.response.status_code = 400  # correct code
 
     # json raises error
-    # http_error.response.json.side_effect = ValueError("some error")
-    # assert is_alchemy_free_tier(web3, http_error) is False
+    http_error.response.json.side_effect = ValueError("some error")
+    assert is_alchemy_free_tier(web3, http_error) is False
+    http_error.response.json.side_effect = None  # no json error raised
 
     # response json does not have error
     http_error.response.json.return_value = {"some": "other"}
