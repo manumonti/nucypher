@@ -179,6 +179,11 @@ class EventScanner:
     because it cannot correctly throttle and decrease the `eth_get_logs` block number range.
     """
 
+    DEFAULT_CHUNK_SIZE_INCREASE = 2.0
+    DEFAULT_CHUNK_SIZE_DECREASE = 1 / DEFAULT_CHUNK_SIZE_INCREASE
+    DEFAULT_MAX_RETRIES = 3
+    DEFAULT_RETRY_DELAY_SECONDS = 3.0
+
     def __init__(
         self,
         web3: Web3,
@@ -187,11 +192,11 @@ class EventScanner:
         events: List,
         min_chunk_scan_size: int = MIN_CHUNK_NUM_BLOCKS,
         max_chunk_scan_size: int = MAX_CHUNK_NUM_BLOCKS,
-        max_request_retries: int = 3,
-        request_retry_seconds: float = 3.0,
+        max_request_retries: int = DEFAULT_MAX_RETRIES,
+        request_retry_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
         chain_reorg_rescan_window: int = 0,
-        chunk_size_decrease: float = 0.5,
-        chunk_size_increase=2.0,
+        chunk_size_decrease: float = DEFAULT_CHUNK_SIZE_DECREASE,
+        chunk_size_increase: float = DEFAULT_CHUNK_SIZE_INCREASE,
     ):
         """
         :param web3: Web3 instance
@@ -200,7 +205,11 @@ class EventScanner:
         :param events: List of web3 Event we scan
         :param min_chunk_scan_size: Minimum number of blocks we try to fetch over JSON-RPC at once
         :param max_chunk_scan_size: JSON-RPC API limit in the number of blocks we query
+        :param max_request_retries: retry attempts for a failed JSON-RPC request
+        :param request_retry_seconds: Seconds to wait before retrying a failed JSON-RPC request
         :param chain_reorg_rescan_window: Number of blocks to rescan in case of chain reorganization (to prevent missed blocks)
+        :param chunk_size_decrease: Factor we decrease the chunk size by if there are failures before retrying
+        :param chunk_size_increase: Factor we increase the chunk size by if no events are found
         """
 
         self.logger = Logger(self.__class__.__name__)
