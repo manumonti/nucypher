@@ -70,8 +70,8 @@ class ActiveRitualTracker:
 
     CHAIN_REORG_SCAN_WINDOW = 20
 
-    MIN_RITUAL_EVENTS_CHUNK_SIZE = os.environ.get(
-        NUCYPHER_ENVVAR_MIN_RITUAL_EVENTS_CHUNK_NUM_BLOCKS, 60
+    MIN_RITUAL_EVENTS_CHUNK_SIZE = int(
+        os.environ.get(NUCYPHER_ENVVAR_MIN_RITUAL_EVENTS_CHUNK_NUM_BLOCKS, 60)
     )  # default 60 blocks @ 2s per block on Polygon = 120s of blocks (somewhat related to interval)
 
     # how often to check/purge for expired cached values - 8hrs?

@@ -42,12 +42,12 @@ from nucypher.config.constants import (
 )
 from nucypher.utilities.logging import Logger
 
-ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS = os.environ.get(
-    NUCYPHER_ENVVAR_ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS, 9
+ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS = int(
+    os.environ.get(NUCYPHER_ENVVAR_ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS, 9)
 )  # they say 10, but it's really < 10
 # some reasonable minimum below alchemy free tier; we don't actually want this too low
-MIN_CHUNK_NUM_BLOCKS = os.environ.get(NUCYPHER_ENVVAR_MIN_CHUNK_NUM_BLOCKS, 9)
-MAX_CHUNK_NUM_BLOCKS = os.environ.get(NUCYPHER_ENVVAR_MAX_CHUNK_NUM_BLOCKS, 1000)
+MIN_CHUNK_NUM_BLOCKS = int(os.environ.get(NUCYPHER_ENVVAR_MIN_CHUNK_NUM_BLOCKS, 9))
+MAX_CHUNK_NUM_BLOCKS = int(os.environ.get(NUCYPHER_ENVVAR_MAX_CHUNK_NUM_BLOCKS, 1000))
 
 
 def generate_events_csv_filepath(contract_name: str, event_name: str) -> Path:
