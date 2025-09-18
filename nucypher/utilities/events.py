@@ -238,10 +238,14 @@ class EventScanner:
         # Factor how fast we increase the chunk size if results are found
         # (slow down scan after starting to get hits)
         if chunk_size_decrease_factor <= 0 or chunk_size_decrease_factor >= 1:
-            raise ValueError("chunk_size_decrease must be between 0 and 1")
+            raise ValueError(
+                "Chunk size decrease factor must be between 0 and 1 (exclusive)"
+            )
         self.chunk_size_decrease_factor = chunk_size_decrease_factor
 
         # Factor how fast we increase chunk size if no results found
+        if chunk_size_increase_factor <= 1:
+            raise ValueError("Chunk size increase factor must be greater than 1")
         self.chunk_size_increase_factor = chunk_size_increase_factor
 
     @property

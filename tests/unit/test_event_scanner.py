@@ -46,6 +46,29 @@ def test_max_scan_chunk_size_enforcement():
         )
 
 
+@pytest.mark.parametrize("factor", [0, 1, 1.5, 2.24])
+def test_chunk_size_decrease_factor_enforcement(factor):
+    with pytest.raises(ValueError, match="Chunk size decrease factor must be between"):
+        _ = EventScanner(
+            web3=Mock(),
+            contract=Mock(),
+            state=Mock(),
+            events=[],
+            chunk_size_decrease_factor=factor,
+        )
+
+
+@pytest.mark.parametrize("factor", [0.1, 0.5, 0.999, 1])
+def test_chunk_size_increase_factor_enforcement(factor):
+    with pytest.raises(ValueError, match="Chunk size increase factor must be greater"):
+        _ = EventScanner(
+            web3=Mock(),
+            contract=Mock(),
+            state=Mock(),
+            events=[],
+            chunk_size_increase_factor=factor,
+        )
+
 def test_estimate_next_chunk_size():
     scanner = EventScanner(web3=Mock(), contract=Mock(), state=Mock(), events=[])
 
