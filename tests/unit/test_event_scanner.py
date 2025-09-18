@@ -57,7 +57,7 @@ def test_estimate_next_chunk_size():
         )
         assert next_chunk_size == min(
             scanner.max_scan_chunk_size,
-            (current_chunk_size * scanner.chunk_size_increase),
+            (current_chunk_size * scanner.chunk_size_increase_factor),
         )
         current_chunk_size = next_chunk_size
 
@@ -82,7 +82,7 @@ def test_estimate_next_chunk_size():
         )
         assert next_chunk_size == min(
             scanner.max_scan_chunk_size,
-            (current_chunk_size * scanner.chunk_size_increase),
+            (current_chunk_size * scanner.chunk_size_increase_factor),
         )
         current_chunk_size = next_chunk_size
 
@@ -283,7 +283,7 @@ def generate_expected_scan_calls_results(scanner, start_block, end_block):
         if not scanner.return_chunk_scan_event:
             current_chunk_size = min(
                 scanner.max_scan_chunk_size,
-                current_chunk_size * scanner.chunk_size_increase,
+                current_chunk_size * scanner.chunk_size_increase_factor,
             )
         if start_block > end_block:
             break
@@ -424,8 +424,8 @@ def test_scan_chunk_alchemy_free_tier(mocker, get_random_checksum_address):
         state=Mock(),
         events=[],
         max_request_retries=max_retries,
-        request_retry_seconds=retry_delay,
-        chunk_size_decrease=retry_chunk_decrease_factor,
+        request_retry_delay_seconds=retry_delay,
+        chunk_size_decrease_factor=retry_chunk_decrease_factor,
     )
 
     get_logs_spy = mocker.spy(web3.eth, "get_logs")
@@ -492,8 +492,8 @@ def test_scan_chunk_not_alchemy_free_tier(mocker, get_random_checksum_address):
         state=Mock(),
         events=[],
         max_request_retries=max_retries,
-        request_retry_seconds=retry_delay,
-        chunk_size_decrease=retry_chunk_decrease_factor,
+        request_retry_delay_seconds=retry_delay,
+        chunk_size_decrease_factor=retry_chunk_decrease_factor,
     )
 
     get_logs_spy = mocker.spy(web3.eth, "get_logs")
@@ -655,8 +655,8 @@ def test_scan_chunk_connection_error(mocker, get_random_checksum_address):
         state=Mock(),
         events=[],
         max_request_retries=max_retries,
-        request_retry_seconds=retry_delay,
-        chunk_size_decrease=retry_chunk_decrease_factor,
+        request_retry_delay_seconds=retry_delay,
+        chunk_size_decrease_factor=retry_chunk_decrease_factor,
     )
 
     get_logs_spy = mocker.spy(web3.eth, "get_logs")

@@ -179,8 +179,8 @@ class EventScanner:
     because it cannot correctly throttle and decrease the `eth_get_logs` block number range.
     """
 
-    DEFAULT_CHUNK_SIZE_INCREASE = 2.0
-    DEFAULT_CHUNK_SIZE_DECREASE = 1 / DEFAULT_CHUNK_SIZE_INCREASE
+    DEFAULT_CHUNK_SIZE_INCREASE_FACTOR = 2.0
+    DEFAULT_CHUNK_SIZE_DECREASE_FACTOR = 1 / DEFAULT_CHUNK_SIZE_INCREASE_FACTOR
     DEFAULT_MAX_RETRIES = 3
     DEFAULT_RETRY_DELAY_SECONDS = 3.0
 
@@ -193,10 +193,10 @@ class EventScanner:
         min_chunk_scan_size: int = MIN_CHUNK_NUM_BLOCKS,
         max_chunk_scan_size: int = MAX_CHUNK_NUM_BLOCKS,
         max_request_retries: int = DEFAULT_MAX_RETRIES,
-        request_retry_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
+        request_retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
         chain_reorg_rescan_window: int = 0,
-        chunk_size_decrease: float = DEFAULT_CHUNK_SIZE_DECREASE,
-        chunk_size_increase: float = DEFAULT_CHUNK_SIZE_INCREASE,
+        chunk_size_decrease_factor: float = DEFAULT_CHUNK_SIZE_DECREASE_FACTOR,
+        chunk_size_increase_factor: float = DEFAULT_CHUNK_SIZE_INCREASE_FACTOR,
     ):
         """
         :param web3: Web3 instance
@@ -206,10 +206,10 @@ class EventScanner:
         :param min_chunk_scan_size: Minimum number of blocks we try to fetch over JSON-RPC at once
         :param max_chunk_scan_size: JSON-RPC API limit in the number of blocks we query
         :param max_request_retries: retry attempts for a failed JSON-RPC request
-        :param request_retry_seconds: Seconds to wait before retrying a failed JSON-RPC request
+        :param request_retry_delay_seconds: Seconds to wait before retrying a failed JSON-RPC request
         :param chain_reorg_rescan_window: Number of blocks to rescan in case of chain reorganization (to prevent missed blocks)
-        :param chunk_size_decrease: Factor we decrease the chunk size by if there are failures before retrying
-        :param chunk_size_increase: Factor we increase the chunk size by if no events are found
+        :param chunk_size_decrease_factor: Factor we decrease the chunk size by if there are failures before retrying
+        :param chunk_size_increase_factor: Factor we increase the chunk size by if no events are found
         """
 
         self.logger = Logger(self.__class__.__name__)
@@ -232,17 +232,17 @@ class EventScanner:
             )
 
         self.max_request_retries = max_request_retries
-        self.request_retry_seconds = request_retry_seconds
+        self.request_retry_seconds = request_retry_delay_seconds
         self.chain_reorg_rescan_window = chain_reorg_rescan_window
 
         # Factor how fast we increase the chunk size if results are found
         # (slow down scan after starting to get hits)
-        if chunk_size_decrease <= 0 or chunk_size_decrease >= 1:
+        if chunk_size_decrease_factor <= 0 or chunk_size_decrease_factor >= 1:
             raise ValueError("chunk_size_decrease must be between 0 and 1")
-        self.chunk_size_decrease = chunk_size_decrease
+        self.chunk_size_decrease_factor = chunk_size_decrease_factor
 
         # Factor how fast we increase chunk size if no results found
-        self.chunk_size_increase = chunk_size_increase
+        self.chunk_size_increase_factor = chunk_size_increase_factor
 
     @property
     def address(self):
@@ -311,7 +311,7 @@ class EventScanner:
             to_block=end_block,
             max_retries=self.max_request_retries,
             retry_delay=self.request_retry_seconds,
-            retry_chunk_decrease_factor=self.chunk_size_decrease,
+            retry_chunk_decrease_factor=self.chunk_size_decrease_factor,
             logger=self.logger,
         )
 
@@ -369,7 +369,7 @@ class EventScanner:
             # When we encounter first events, reset the chunk size window
             current_chunk_size = self.min_scan_chunk_size
         else:
-            current_chunk_size *= self.chunk_size_increase
+            current_chunk_size *= self.chunk_size_increase_factor
 
         current_chunk_size = max(self.min_scan_chunk_size, current_chunk_size)
         current_chunk_size = min(self.max_scan_chunk_size, current_chunk_size)
