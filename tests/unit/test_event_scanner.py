@@ -668,7 +668,6 @@ def test_scan_chunk_connection_error(mocker, get_random_checksum_address):
     contract.address = contract_address
     from_block = 100
     to_block = 200
-    max_retries = max_retries
     retry_delay = 0.1
     retry_chunk_decrease_factor = 0.5
 
@@ -690,3 +689,63 @@ def test_scan_chunk_connection_error(mocker, get_random_checksum_address):
             to_block,
         )
     assert get_logs_spy.call_count == max_retries
+
+
+def test_scan_use_reduced_chunk_size_for_remaining_chunks_after_reduction(
+    mocker, get_random_checksum_address
+):
+    web3 = mocker.Mock()
+    web3.eth = mocker.Mock()
+    web3.eth.get_block.return_value = {"timestamp": time.time()}
+    web3.provider.endpoint_uri = (
+        "https://polygon-mainnet.g.alchemy.com/v2/1234567890abcdef"
+    )
+
+    contract_address = get_random_checksum_address()
+    contract = mocker.Mock()
+    contract.address = contract_address
+    max_retries = 3
+    retry_delay = 0.1
+
+    # configure for endpoint's server error
+    bad_request_response = requests.Response()
+    bad_request_response.status_code = 502  # Bad Gateway error
+    http_error = requests.HTTPError("my error", response=bad_request_response)
+
+    num_failures = max_retries - 1
+
+    call_count = {"n": 0}
+
+    def mock_get_logs(params):
+        # first two calls raise error, subsequent calls return empty list
+        call_count["n"] += 1
+        if call_count["n"] <= num_failures:
+            raise http_error
+        else:
+            return []
+
+    web3.eth.get_logs.side_effect = mock_get_logs
+
+    # need numbers here that work well together i.e. produce whole number of calls after reductions
+    from_block = 100
+    to_block = 1000
+    start_chunk_size = 200
+    retry_chunk_decrease_factor = 0.5
+
+    scanner = EventScanner(
+        web3=web3,
+        contract=contract,
+        state=Mock(),
+        events=[],
+        max_request_retries=max_retries,
+        request_retry_delay_seconds=retry_delay,
+        chunk_size_decrease_factor=retry_chunk_decrease_factor,
+    )
+
+    get_logs_spy = mocker.spy(web3.eth, "get_logs")
+
+    scanner.scan(from_block, to_block, start_chunk_size=start_chunk_size)
+    num_successes = (to_block - from_block) // (
+        start_chunk_size * (retry_chunk_decrease_factor**num_failures)
+    )
+    assert get_logs_spy.call_count == (num_failures + num_successes)
