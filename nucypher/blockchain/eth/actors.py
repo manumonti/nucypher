@@ -373,11 +373,7 @@ class Operator(BaseActor):
         for i, staking_provider_address in enumerate(ritual.providers):
             if self.checksum_address == staking_provider_address:
                 # Local
-                external_validator = Validator(
-                    address=self.checksum_address,
-                    public_key=self.ritual_power.public_key(),
-                    share_index=i,
-                )
+                public_key = self.ritual_power.public_key()
             else:
                 # Remote
                 # TODO optimize rpc calls by obtaining public keys altogether
@@ -385,15 +381,15 @@ class Operator(BaseActor):
                 public_key = self.coordinator_agent.get_provider_public_key(
                     provider=staking_provider_address, ritual_id=ritual.id
                 )
-                self.log.debug(
-                    f"Ferveo public key for {staking_provider_address} is {bytes(public_key).hex()[:-8:-1]}"
-                )
-                external_validator = Validator(
-                    address=staking_provider_address,
-                    public_key=public_key,
-                    share_index=i,
-                )
-            result.append(external_validator)
+            self.log.debug(
+                f"Validator #{i}: {staking_provider_address}, public key: {bytes(public_key).hex()[:10]}"
+            )
+            validator = Validator(
+                address=staking_provider_address,
+                public_key=public_key,
+                share_index=i,
+            )
+            result.append(validator)
 
         self.dkg_storage.store_validators(ritual.id, result)
 
