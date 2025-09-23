@@ -782,8 +782,6 @@ def aggregated_transcript(
             )
         )
 
-    validators.sort(key=lambda x: x.address)  # must be sorted
-
     validator_messages = []
     for validator in validators:
         transcript = dkg.generate_transcript(
