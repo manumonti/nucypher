@@ -590,7 +590,7 @@ def mock_rest_middleware():
 
 @pytest.fixture(scope="session")
 def conditions_test_data():
-    test_conditions = Path(tests.__file__).parent / "data" / "test_conditions.json"
+    test_conditions = Path(__file__).parent / "data" / "test_conditions.json"
     with open(test_conditions, "r") as file:
         data = json.loads(file.read())
     for name, condition in data.items():
