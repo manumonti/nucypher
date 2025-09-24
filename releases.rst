@@ -4,7 +4,7 @@ Releases
 
 .. towncrier release notes start
 
-v7.6.0 (2025-09-24)
+v7.6.1 (2025-09-24)
 -------------------
 
 Features
