@@ -48,4 +48,4 @@ smoke-test: clean
 
 lock: clean
     # Relock dependencies
-	scripts/dependencies/relock_dependencies.sh
+	scripts/relock_dependencies.sh

@@ -33,7 +33,6 @@ def resolve_validators() -> List[Validator]:
             share_index=i,
         )
         result.append(external_validator)
-    result = sorted(result, key=lambda x: x.address)
     return result
 
 

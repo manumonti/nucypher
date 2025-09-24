@@ -13,13 +13,17 @@ def test_echo_nucypher_version(click_runner):
     assert str(nucypher.__version__) in result.output, 'Version text was not produced.'
 
 
-@pytest.mark.parametrize('command', (('--help', ), tuple()))
-def test_nucypher_help_message(click_runner, command):
-    entry_points = {command.name for command in ENTRY_POINTS}
-    result = click_runner.invoke(nucypher_cli, tuple(), catch_exceptions=False)
-    assert result.exit_code == 0
-    assert '[OPTIONS] COMMAND [ARGS]' in result.output, 'Missing or invalid help text was produced.'
-    assert all(e in result.output for e in entry_points)
+@pytest.mark.parametrize("option", [("--help",), tuple()])
+def test_nucypher_help_message(click_runner, option):
+    result = click_runner.invoke(nucypher_cli, option, catch_exceptions=False)
+    if len(option) == 0:
+        # No args gives exit code 2
+        assert result.exit_code == 2
+    else:
+        assert result.exit_code == 0
+
+    assert "[OPTIONS] COMMAND [ARGS]" in result.output, result.output
+    assert all(command.name in result.output for command in ENTRY_POINTS), result.output
 
 
 @pytest.mark.parametrize('entry_point_name, entry_point', ([command.name, command] for command in ENTRY_POINTS))

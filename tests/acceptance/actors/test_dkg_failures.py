@@ -41,8 +41,7 @@ def signer():
 
 @pytest.fixture(scope="module")
 def cohort(testerchain, clock, coordinator_agent, ursulas, dkg_size):
-    nodes = list(sorted(ursulas[:dkg_size], key=lambda x: int(x.checksum_address, 16)))
-    assert len(nodes) == dkg_size
+    nodes = ursulas[:dkg_size]
     for node in nodes:
         node.ritual_tracker.task._task.clock = clock
         node.ritual_tracker.start()
@@ -89,7 +88,10 @@ def test_dkg_failure_with_ferveo_key_mismatch(
 
     print("==================== INITIALIZING ====================")
 
-    cohort_staking_provider_addresses = list(u.checksum_address for u in cohort)
+    cohort_staking_provider_addresses = list(
+        u.checksum_address
+        for u in sorted(cohort, key=lambda x: int(x.checksum_address, 16))
+    )
 
     # Approve the ritual token for the coordinator agent to spend
     amount = fee_model.getRitualCost(len(cohort_staking_provider_addresses), duration)

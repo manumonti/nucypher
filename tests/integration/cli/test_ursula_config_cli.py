@@ -30,6 +30,7 @@ from tests.constants import (
     MOCK_ETH_PROVIDER_URI,
     MOCK_IP_ADDRESS,
     NO_ENTER,
+    OPERATOR_CHOICE,
     YES_ENTER,
 )
 from tests.utils.ursula import select_test_port
@@ -66,7 +67,7 @@ def test_interactive_initialize_ursula(click_runner, mocker, tmpdir):
         MOCK_ETH_PROVIDER_URI,
     )
 
-    user_input = "0\n" + YES_ENTER + FAKE_PASSWORD_CONFIRMED
+    user_input = OPERATOR_CHOICE + YES_ENTER + FAKE_PASSWORD_CONFIRMED
     result = click_runner.invoke(
         nucypher_cli, init_args, input=user_input, catch_exceptions=False
     )

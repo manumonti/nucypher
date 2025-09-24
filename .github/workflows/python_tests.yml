@@ -11,13 +11,17 @@ concurrency:
   group: ci-tests-${{ github.ref }}-pytest
   cancel-in-progress: true
 
+env:
+  # Used for testing alchemy free tier rpc error detection and retry logic
+  ALCHEMY_FREE_TIER_POLYGON_RPC_ENDPOINT: ${{ secrets.ALCHEMY_FREE_TIER_POLYGON_RPC_ENDPOINT }}
+
 jobs:
   python-tests:
 
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [ "3.9", "3.12" ]
+        python-version: [ "3.10", "3.12" ]
 
     steps:
       - name: Checkout repo

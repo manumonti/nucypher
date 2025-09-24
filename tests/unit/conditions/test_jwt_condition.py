@@ -72,7 +72,7 @@ def jwt_token(
     return jwt.encode(claims, TEST_ECDSA_PRIVATE_KEY, algorithm="ES256")
 
 
-class TestJWTVerificationCall(JWTVerificationCall):
+class MockJWTVerificationCall(JWTVerificationCall):
     class Schema(JWTVerificationCall.Schema):
         @validates("jwt_token")
         def validate_jwt_token(self, value):
@@ -99,7 +99,7 @@ def test_jwt_verification_call_invalid():
 
 def test_jwt_verification_call_valid():
     token = jwt_token()
-    call = TestJWTVerificationCall(jwt_token=token, public_key=TEST_ECDSA_PUBLIC_KEY)
+    call = MockJWTVerificationCall(jwt_token=token, public_key=TEST_ECDSA_PUBLIC_KEY)
     assert call.execute()
 
 

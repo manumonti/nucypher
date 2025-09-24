@@ -9,6 +9,7 @@ from twisted.internet import threads
 from web3.datastructures import AttributeDict
 
 from nucypher.blockchain.eth.models import Coordinator
+from nucypher.config.constants import NUCYPHER_ENVVAR_MIN_RITUAL_EVENTS_CHUNK_NUM_BLOCKS
 from nucypher.policy.conditions.utils import camel_case_to_snake
 from nucypher.utilities.cache import TTLCache
 from nucypher.utilities.events import EventScanner, JSONifiedState
@@ -68,8 +69,10 @@ class EventScannerTask(SimpleTask):
 class ActiveRitualTracker:
 
     CHAIN_REORG_SCAN_WINDOW = 20
-    MAX_CHUNK_SIZE = 10000
-    MIN_CHUNK_SIZE = 60  # 60 blocks @ 2s per block on Polygon = 120s of blocks (somewhat related to interval)
+
+    MIN_RITUAL_EVENTS_CHUNK_SIZE = int(
+        os.environ.get(NUCYPHER_ENVVAR_MIN_RITUAL_EVENTS_CHUNK_NUM_BLOCKS, 60)
+    )  # default 60 blocks @ 2s per block on Polygon = 120s of blocks (somewhat related to interval)
 
     # how often to check/purge for expired cached values - 8hrs?
     _PARTICIPATION_STATES_PURGE_INTERVAL = 60 * 60 * 8
@@ -136,10 +139,7 @@ class ActiveRitualTracker:
             state=self.state,
             contract=self.contract,
             events=self.events,
-            # How many maximum blocks at the time we request from JSON-RPC,
-            # and we are unlikely to exceed the response size limit of the JSON-RPC server
-            max_chunk_scan_size=self.MAX_CHUNK_SIZE,
-            min_chunk_scan_size=self.MIN_CHUNK_SIZE,
+            min_chunk_scan_size=self.MIN_RITUAL_EVENTS_CHUNK_SIZE,
             chain_reorg_rescan_window=self.CHAIN_REORG_SCAN_WINDOW,
         )
 

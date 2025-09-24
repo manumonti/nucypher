@@ -1,6 +1,6 @@
 """
 Credit to the original authors for making this code example incorporated into this module found here:
-https://web3py.readthedocs.io/en/stable/examples.html#example-code
+https://web3py.readthedocs.io/en/stable/filters.html#example-code
 
 A stateful event scanner for Ethereum-based blockchains using Web3.py.
 
@@ -11,16 +11,21 @@ where events are added wherever the scanner left off.
 import csv
 import datetime
 import json
+import math
+import os
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from http import HTTPStatus
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import maya
 from eth_abi.codec import ABICodec
+from eth_typing import ChecksumAddress
 from eth_utils import encode_hex
 from eth_utils.abi import event_abi_to_log_topic
+from requests import HTTPError
 from web3 import Web3
 from web3._utils.events import get_event_data
 from web3.contract.contract import Contract
@@ -30,43 +35,84 @@ from web3.types import BlockIdentifier
 
 from nucypher.blockchain.eth.agents import EthereumContractAgent
 from nucypher.blockchain.eth.events import EventRecord
+from nucypher.config.constants import (
+    NUCYPHER_ENVVAR_ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS,
+    NUCYPHER_ENVVAR_MAX_CHUNK_NUM_BLOCKS,
+    NUCYPHER_ENVVAR_MIN_CHUNK_NUM_BLOCKS,
+)
 from nucypher.utilities.logging import Logger
+
+ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS = int(
+    os.environ.get(NUCYPHER_ENVVAR_ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS, 9)
+)  # they say 10, but it's really < 10
+# some reasonable minimum below alchemy free tier; we don't actually want this too low
+MIN_CHUNK_NUM_BLOCKS = int(os.environ.get(NUCYPHER_ENVVAR_MIN_CHUNK_NUM_BLOCKS, 9))
+MAX_CHUNK_NUM_BLOCKS = int(os.environ.get(NUCYPHER_ENVVAR_MAX_CHUNK_NUM_BLOCKS, 1000))
 
 
 def generate_events_csv_filepath(contract_name: str, event_name: str) -> Path:
-    return Path(f'{contract_name}_{event_name}_{maya.now().datetime().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
+    return Path(
+        f"{contract_name}_{event_name}_{maya.now().datetime().strftime('%Y-%m-%d_%H-%M-%S')}.csv"
+    )
 
 
-def write_events_to_csv_file(csv_file: Path,
-                             agent: EthereumContractAgent,
-                             event_name: str,
-                             argument_filters: Dict = None,
-                             from_block: Optional[BlockIdentifier] = 0,
-                             to_block: Optional[BlockIdentifier] = 'latest') -> bool:
+def write_events_to_csv_file(
+    csv_file: Path,
+    agent: EthereumContractAgent,
+    event_name: str,
+    argument_filters: Dict = None,
+    from_block: Optional[BlockIdentifier] = 0,
+    to_block: Optional[BlockIdentifier] = "latest",
+) -> bool:
     """
     Write events to csv file.
     :return: True if data written to file, False if there was no event data to write
     """
     event_type = agent.contract.events[event_name]
-    entries = event_type.get_logs(fromBlock=from_block, toBlock=to_block, argument_filters=argument_filters)
+    entries = event_type.get_logs(
+        fromBlock=from_block, toBlock=to_block, argument_filters=argument_filters
+    )
     if not entries:
         return False
 
-    with open(csv_file, mode='w') as events_file:
+    with open(csv_file, mode="w") as events_file:
         events_writer = None
         for event_record in entries:
             event_record = EventRecord(event_record)
             event_row = OrderedDict()
-            event_row['event_name'] = event_name
-            event_row['block_number'] = event_record.block_number
-            event_row['unix_timestamp'] = event_record.timestamp
-            event_row['date'] = maya.MayaDT(event_record.timestamp).iso8601()
+            event_row["event_name"] = event_name
+            event_row["block_number"] = event_record.block_number
+            event_row["unix_timestamp"] = event_record.timestamp
+            event_row["date"] = maya.MayaDT(event_record.timestamp).iso8601()
             event_row.update(dict(event_record.args.items()))
             if events_writer is None:
                 events_writer = csv.DictWriter(events_file, fieldnames=event_row.keys())
                 events_writer.writeheader()
             events_writer.writerow(event_row)
     return True
+
+
+def is_alchemy_free_tier(web3: Web3, http_error: HTTPError) -> bool:
+    try:
+        # very specific error case
+        rpc_response = http_error.response.json()
+        is_http_400 = http_error.response.status_code == HTTPStatus.BAD_REQUEST
+        is_alchemy_provider = "alchemy" in getattr(web3.provider, "endpoint_uri", "")
+        is_rpc_response_error = "error" in rpc_response
+        is_alchemy_free_tier_error = "Free tier" in rpc_response["error"]["message"]
+        is_rpc_bad_request = rpc_response["error"]["code"] == -32600
+
+        return all(
+            [
+                is_http_400,
+                is_alchemy_provider,
+                is_rpc_response_error,
+                is_alchemy_free_tier_error,
+                is_rpc_bad_request,
+            ]
+        )
+    except (ValueError, KeyError):
+        return False
 
 
 logger = Logger("events")
@@ -133,26 +179,37 @@ class EventScanner:
     because it cannot correctly throttle and decrease the `eth_get_logs` block number range.
     """
 
+    DEFAULT_CHUNK_SIZE_INCREASE_FACTOR = 2.0
+    DEFAULT_CHUNK_SIZE_DECREASE_FACTOR = 1 / DEFAULT_CHUNK_SIZE_INCREASE_FACTOR
+    DEFAULT_MAX_RETRIES = 3
+    DEFAULT_RETRY_DELAY_SECONDS = 3.0
+
     def __init__(
         self,
         web3: Web3,
         contract: Contract,
         state: EventScannerState,
         events: List,
-        min_chunk_scan_size: int = 10,  # 12 s/block = 120 seconds period
-        max_chunk_scan_size: int = 10000,
-        max_request_retries: int = 30,
-        request_retry_seconds: float = 3.0,
+        min_chunk_scan_size: int = MIN_CHUNK_NUM_BLOCKS,
+        max_chunk_scan_size: int = MAX_CHUNK_NUM_BLOCKS,
+        max_request_retries: int = DEFAULT_MAX_RETRIES,
+        request_retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
         chain_reorg_rescan_window: int = 0,
+        chunk_size_decrease_factor: float = DEFAULT_CHUNK_SIZE_DECREASE_FACTOR,
+        chunk_size_increase_factor: float = DEFAULT_CHUNK_SIZE_INCREASE_FACTOR,
     ):
         """
+        :param web3: Web3 instance
         :param contract: Contract
+        :param state: EventScannerState instance that stores what blocks we have scanned
         :param events: List of web3 Event we scan
-        :param filters: Filters passed to get_logs
-        :param max_chunk_scan_size: JSON-RPC API limit in the number of blocks we query. (Recommendation: 10,000 for mainnet, 500,000 for testnets)
-        :param max_request_retries: How many times we try to reattempt a failed JSON-RPC call
-        :param request_retry_seconds: Delay between failed requests to let JSON-RPC server to recover
+        :param min_chunk_scan_size: Minimum number of blocks we try to fetch over JSON-RPC at once
+        :param max_chunk_scan_size: JSON-RPC API limit in the number of blocks we query
+        :param max_request_retries: retry attempts for a failed JSON-RPC request
+        :param request_retry_delay_seconds: Seconds to wait before retrying a failed JSON-RPC request
         :param chain_reorg_rescan_window: Number of blocks to rescan in case of chain reorganization (to prevent missed blocks)
+        :param chunk_size_decrease_factor: Factor we decrease the chunk size by if there are failures before retrying
+        :param chunk_size_increase_factor: Factor we increase the chunk size by if no events are found
         """
 
         self.logger = Logger(self.__class__.__name__)
@@ -163,17 +220,33 @@ class EventScanner:
 
         # Our JSON-RPC throttling parameters
         self.min_scan_chunk_size = min_chunk_scan_size
+        if self.min_scan_chunk_size < MIN_CHUNK_NUM_BLOCKS:
+            raise ValueError(
+                f"Min scan chunk size must be at least {MIN_CHUNK_NUM_BLOCKS}"
+            )
+
         self.max_scan_chunk_size = max_chunk_scan_size
+        if self.max_scan_chunk_size > MAX_CHUNK_NUM_BLOCKS:
+            raise ValueError(
+                f"Max scan chunk size must be at most {MAX_CHUNK_NUM_BLOCKS}"
+            )
+
         self.max_request_retries = max_request_retries
-        self.request_retry_seconds = request_retry_seconds
+        self.request_retry_seconds = request_retry_delay_seconds
         self.chain_reorg_rescan_window = chain_reorg_rescan_window
 
         # Factor how fast we increase the chunk size if results are found
-        # # (slow down scan after starting to get hits)
-        self.chunk_size_decrease = 0.5
+        # (slow down scan after starting to get hits)
+        if chunk_size_decrease_factor <= 0 or chunk_size_decrease_factor >= 1:
+            raise ValueError(
+                "Chunk size decrease factor must be between 0 and 1 (exclusive)"
+            )
+        self.chunk_size_decrease_factor = chunk_size_decrease_factor
 
-        # Factor how was we increase chunk size if no results found
-        self.chunk_size_increase = 2.0
+        # Factor how fast we increase chunk size if no results found
+        if chunk_size_increase_factor <= 1:
+            raise ValueError("Chunk size increase factor must be greater than 1")
+        self.chunk_size_increase_factor = chunk_size_increase_factor
 
     @property
     def address(self):
@@ -234,26 +307,32 @@ class EventScanner:
             return block_timestamps[block_num]
 
         all_processed = []
-        events = _fetch_events_for_contract(
-            self.web3,
-            self.contract,
-            self.events,
+        events, actual_end_block = _fetch_events_for_contract(
+            web3=self.web3,
+            contract=self.contract,
+            events=self.events,
             from_block=start_block,
             to_block=end_block,
+            max_retries=self.max_request_retries,
+            retry_delay=self.request_retry_seconds,
+            retry_chunk_decrease_factor=self.chunk_size_decrease_factor,
+            logger=self.logger,
         )
 
         for evt in events:
             processed = self.process_event(event=evt, get_block_when=get_block_when)
             all_processed.append(processed)
 
-        end_block_timestamp = get_block_when(end_block)
-        return end_block, end_block_timestamp, all_processed
+        end_block_timestamp = get_block_when(actual_end_block)
+        return actual_end_block, end_block_timestamp, all_processed
 
     def process_event(
         self, event: AttributeDict, get_block_when: Callable[[int], datetime.datetime]
     ):
         """Process events and update internal state"""
-        idx = event["logIndex"]  # Integer of the log index position in the block, null when its pending
+        idx = event[
+            "logIndex"
+        ]  # Integer of the log index position in the block, null when its pending
 
         # We cannot avoid minor chain reorganisations, but
         # at least we must avoid blocks that are not mined yet
@@ -294,7 +373,7 @@ class EventScanner:
             # When we encounter first events, reset the chunk size window
             current_chunk_size = self.min_scan_chunk_size
         else:
-            current_chunk_size *= self.chunk_size_increase
+            current_chunk_size *= self.chunk_size_increase_factor
 
         current_chunk_size = max(self.min_scan_chunk_size, current_chunk_size)
         current_chunk_size = min(self.max_scan_chunk_size, current_chunk_size)
@@ -316,7 +395,7 @@ class EventScanner:
 
         if start_block > end_block:
             raise ValueError(
-                f"start block ({start_block}) is greater than end block ({end_block})"
+                f"Start block ({start_block}) is greater than end block ({end_block})"
             )
 
         current_block = start_block
@@ -328,9 +407,9 @@ class EventScanner:
 
         # All processed entries we got on this scan cycle
         all_processed = []
+        chunk_size_decreased = False
 
         while current_block <= end_block:
-
             self.state.start_chunk(current_block)
 
             estimated_end_block = min(
@@ -341,7 +420,9 @@ class EventScanner:
             )
 
             start = time.time()
-            actual_end_block, end_block_timestamp, new_entries = self.scan_chunk(current_block, estimated_end_block)
+            actual_end_block, end_block_timestamp, new_entries = self.scan_chunk(
+                current_block, estimated_end_block
+            )
 
             # Where does our current chunk scan ends - are we out of chain yet?
             current_end = actual_end_block
@@ -349,8 +430,13 @@ class EventScanner:
             last_scan_duration = time.time() - start
             all_processed += new_entries
 
-            # Try to guess how many blocks to fetch over `eth_get_logs` API next time
-            chunk_size = self.estimate_next_chunk_size(chunk_size, len(new_entries))
+            if actual_end_block < estimated_end_block:
+                # original chunk size was too large; use what worked previously
+                chunk_size = actual_end_block - current_block
+                chunk_size_decreased = True
+            elif not chunk_size_decreased:
+                # Try to guess how many blocks to fetch over `eth_get_logs` API next time
+                chunk_size = self.estimate_next_chunk_size(chunk_size, len(new_entries))
 
             # Set where the next chunk starts
             current_block = current_end + 1
@@ -360,9 +446,89 @@ class EventScanner:
         return all_processed, total_chunks_scanned
 
 
+def _get_logs(
+    web3: Web3,
+    contract_address: ChecksumAddress,
+    topics: List,
+    from_block: int,
+    to_block: int,
+    max_retries: int,
+    retry_delay: float,
+    retry_chunk_decrease_factor: float,
+    logger: Logger,
+) -> Tuple[Iterable, int]:
+    event_filter_params = {
+        "address": contract_address,
+        "topics": [topics],
+        "fromBlock": from_block,
+    }
+
+    to_block_to_use = to_block
+    # Call JSON-RPC API on your Ethereum node.
+    # get_logs() returns raw AttributedDict entries
+    for attempt in range(max_retries):
+        try:
+            # dynamically update toBlock value based on retries etc.
+            event_filter_params["toBlock"] = to_block_to_use
+            logger.debug(
+                f"Querying eth_getLogs with the following parameters: {event_filter_params}"
+            )
+            logs = web3.eth.get_logs(event_filter_params)
+            return logs, to_block_to_use
+        except HTTPError as http_error:
+            logger.warn(
+                f"eth_getLogs API call failed for range {from_block} - {to_block_to_use} ({to_block_to_use - from_block} blocks) on attempt {attempt + 1}/{max_retries}: {http_error}"
+            )
+
+            # Assumption: the reason for http error is fetching too many blocks
+            if attempt >= max_retries - 1:
+                # no more retries left
+                logger.warn("eth_getLogs API call failed, no more retries left")
+                raise http_error
+
+            # update to_block since range could be problematic; don't go lower than min blocks
+            if is_alchemy_free_tier(web3, http_error):
+                if attempt > 0:
+                    # we already reduced the chunk size for Alchemy, but it did not help
+                    logger.warn(
+                        "Alchemy free tier reduction was unsuccessful, retrying will not help"
+                    )
+                    raise http_error
+
+                # Update to_block and directly set range since alchemy free tier
+                to_block_to_use = (
+                    from_block + ALCHEMY_FREE_TIER_MAX_CHUNK_NUM_BLOCKS
+                )  # alchemy free tier max
+                logger.warn(
+                    f"Alchemy free tier detected. Retrying with range {from_block} - {to_block_to_use} ({to_block_to_use - from_block} blocks)"
+                )
+            else:
+                # reducing the chunk size by a factor
+                # (we assume the original chunk size was too large)
+                to_block_to_use = from_block + max(
+                    math.floor(
+                        (to_block_to_use - from_block) * retry_chunk_decrease_factor
+                    ),
+                    MIN_CHUNK_NUM_BLOCKS,
+                )
+                logger.warn(
+                    f"Reducing range to {from_block} - {to_block_to_use} ({to_block_to_use - from_block} blocks) and retrying in {retry_delay}s"
+                )
+                # pause before retrying
+                time.sleep(retry_delay)
+
+
 def _fetch_events_for_contract(
-    web3, contract, events, from_block: int, to_block: int
-) -> Iterable:
+    web3,
+    contract,
+    events,
+    from_block: int,
+    to_block: int,
+    max_retries: int,
+    retry_delay: float,
+    retry_chunk_decrease_factor: float,
+    logger: Logger,
+) -> Tuple[Iterable, int]:
     """Get events using eth_getLogs API.
 
     This method is detached from any contract instance.
@@ -389,21 +555,18 @@ def _fetch_events_for_contract(
         topics.add(event_topic)
         event_topics_to_abis[event_topic] = event_abi
 
-    event_filter_params = {
-        "address": contract.address,
-        "topics": [list(topics)],
-        "fromBlock": from_block,
-    }
-    if to_block is not None:
-        event_filter_params["toBlock"] = to_block
-
-    logger.debug(
-        f"Querying eth_getLogs with the following parameters: {event_filter_params}"
-    )
-
     # Call JSON-RPC API on your Ethereum node.
-    # get_logs() returns raw AttributedDict entries
-    logs = web3.eth.get_logs(event_filter_params)
+    logs, actual_end_block = _get_logs(
+        web3,
+        contract.address,
+        list(topics),
+        from_block,
+        to_block,
+        max_retries,
+        retry_delay,
+        retry_chunk_decrease_factor,
+        logger,
+    )
 
     # Convert raw binary data to Python proxy objects as described by ABI
     all_events = []
@@ -425,7 +588,7 @@ def _fetch_events_for_contract(
         # Note: This was originally yield,
         # but deferring the timeout exception caused the throttle logic not to work
         all_events.append(evt)
-    return all_events
+    return all_events, actual_end_block
 
 
 class JSONifiedState(EventScannerState):
@@ -455,7 +618,9 @@ class JSONifiedState(EventScannerState):
         """Restore the last scan state from a file."""
         try:
             self.state = json.load(open(self.fname, "rt"))
-            print(f"Restored the state, previously {self.state['last_scanned_block']} blocks have been scanned")
+            print(
+                f"Restored the state, previously {self.state['last_scanned_block']} blocks have been scanned"
+            )
         except (IOError, json.decoder.JSONDecodeError):
             print("State starting from scratch")
             self.reset()
@@ -498,7 +663,7 @@ class JSONifiedState(EventScannerState):
         # One transaction may contain multiple events
         # and each one of those gets their own log index
 
-        event_name = event.event # "Transfer"
+        event_name = event.event  # "Transfer"
         log_index = event.logIndex  # Log index within the block
         transaction_index = event.transactionIndex  # Transaction index within the block
         txhash = event.transactionHash.hex()  # Transaction hash

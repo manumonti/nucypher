@@ -18,8 +18,7 @@ from nucypher.blockchain.eth.trackers.dkg import ActiveRitualTracker
 @pytest.fixture(scope="module")
 def cohort(ursulas):
     """Creates a cohort of Ursulas"""
-    nodes = list(sorted(ursulas[:4], key=lambda x: int(x.checksum_address, 16)))
-    assert len(nodes) == 4  # sanity check
+    nodes = ursulas[:4]
     return nodes
 
 

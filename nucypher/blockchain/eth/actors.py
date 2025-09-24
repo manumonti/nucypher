@@ -373,11 +373,7 @@ class Operator(BaseActor):
         for i, staking_provider_address in enumerate(ritual.providers):
             if self.checksum_address == staking_provider_address:
                 # Local
-                external_validator = Validator(
-                    address=self.checksum_address,
-                    public_key=self.ritual_power.public_key(),
-                    share_index=i,
-                )
+                public_key = self.ritual_power.public_key()
             else:
                 # Remote
                 # TODO optimize rpc calls by obtaining public keys altogether
@@ -385,15 +381,15 @@ class Operator(BaseActor):
                 public_key = self.coordinator_agent.get_provider_public_key(
                     provider=staking_provider_address, ritual_id=ritual.id
                 )
-                self.log.debug(
-                    f"Ferveo public key for {staking_provider_address} is {bytes(public_key).hex()[:-8:-1]}"
-                )
-                external_validator = Validator(
-                    address=staking_provider_address,
-                    public_key=public_key,
-                    share_index=i,
-                )
-            result.append(external_validator)
+            self.log.debug(
+                f"Validator #{i}: {staking_provider_address}, public key: {bytes(public_key).hex()[:10]}"
+            )
+            validator = Validator(
+                address=staking_provider_address,
+                public_key=public_key,
+                share_index=i,
+            )
+            result.append(validator)
 
         self.dkg_storage.store_validators(ritual.id, result)
 
@@ -815,7 +811,7 @@ class Operator(BaseActor):
         if status != Coordinator.RitualStatus.ACTIVE:
             # This is a normal state when replaying/syncing historical
             # blocks that contain StartRitual events of pending or completed rituals.
-            self.log.debug(
+            self.log.info(
                 f"Ritual #{ritual_id} is not active so handover is not possible; dkg status={status}."
             )
             return False
@@ -853,11 +849,16 @@ class Operator(BaseActor):
             departing_validator=departing_validator,
         )
         if handover_status != expected_handover_status:
-            self.log.debug(
-                f"Handover status, {handover_status}, for ritual #{ritual_id} is not in the expected state {expected_handover_status}."
+            self.log.info(
+                f"Handover status ({handover_status}) for ritual #{ritual_id} is not in the "
+                f"expected state ({expected_handover_status})."
             )
             return False
 
+        self.log.info(
+            f"Handover applicable to node: status={handover_status}, "
+            f"ritual=#{ritual_id}, departing_validator={departing_validator}."
+        )
         return True
 
     def _is_handover_transcript_required(
@@ -881,6 +882,12 @@ class Operator(BaseActor):
 
         # Raises ValueError if departing_validator is not in the providers list
         handover_slot_index = ritual.providers.index(departing_validator)
+
+        self.log.info(
+            f"Producing handover transcript for ritual #{ritual_id}, departing validator {departing_validator}, "
+            f"and handover slot index {handover_slot_index}."
+        )
+
         # FIXME: Workaround: add serialized public key to aggregated transcript.
         # Since we use serde/bincode in rust, we need a metadata field for the public key, which is the field size,
         # as 8 bytes in little-endian. See ferveo#209
@@ -900,6 +907,9 @@ class Operator(BaseActor):
             shares=ritual.dkg_size,
             threshold=ritual.threshold,
         )
+        self.log.info(
+            f"Resulting handover transcript (first 10 bytes): {bytes(handover_transcript)[:10].hex()}"
+        )
         return handover_transcript
 
     def _publish_handover_transcript(
@@ -916,6 +926,11 @@ class Operator(BaseActor):
         identifier = PhaseId(ritual_id=ritual_id, phase=HANDOVER_AWAITING_TRANSCRIPT)
         async_tx_hooks = self._setup_async_hooks(
             identifier, ritual_id, departing_validator, handover_transcript
+        )
+
+        self.log.info(
+            f"Publishing handover transcript ({handover_transcript[:10].hex()}) "
+            f"for ritual #{ritual_id} and departing validator {departing_validator}"
         )
 
         async_tx = self.coordinator_agent.post_handover_transcript(
@@ -940,7 +955,7 @@ class Operator(BaseActor):
         if not self._is_handover_transcript_required(
             ritual_id=ritual_id, departing_validator=departing_participant
         ):
-            self.log.debug(
+            self.log.info(
                 f"No action required for handover transcript for ritual #{ritual_id}"
             )
             return None
@@ -975,7 +990,7 @@ class Operator(BaseActor):
             departing_validator=departing_participant,
             handover_transcript=handover_transcript,
         )
-        self.log.debug(
+        self.log.info(
             f"{self.transacting_power.account[:8]} created a handover transcript for "
             f"DKG ritual #{ritual_id} and departing validator {departing_participant}."
         )
@@ -1006,7 +1021,7 @@ class Operator(BaseActor):
             ritual_id=ritual_id,
             departing_validator=self.checksum_address,
         )
-        self.log.debug(
+        self.log.info(
             f"{self.transacting_power.account[:8]} producing a new blinded share "
             f"for handover at ritual #{ritual_id}."  # and validator index #{handover.share_index}." # TODO: See ferveo#210
         )
@@ -1042,6 +1057,9 @@ class Operator(BaseActor):
         start = 32 + 48 * ritual.threshold + 96 * share_index
         length = 96
         blinded_share = aggregate_bytes[start : start + length]
+        self.log.info(
+            f"Resulting blinded share: {blinded_share.hex()} (share_index: {share_index}, start: {start})"
+        )
         return blinded_share
 
     def _publish_blinded_share_for_handover(
@@ -1056,6 +1074,10 @@ class Operator(BaseActor):
             identifier,
             ritual_id,
             blinded_share,
+        )
+
+        self.log.info(
+            f"Publishing handover blinded share ({blinded_share[:10].hex()}) for ritual #{ritual_id}"
         )
 
         async_tx = self.coordinator_agent.post_blinded_share_for_handover(
@@ -1073,7 +1095,7 @@ class Operator(BaseActor):
         self, ritual_id: int, **kwargs
     ) -> Optional[AsyncTx]:
         if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
-            self.log.debug(
+            self.log.info(
                 f"No action required for handover blinded share for ritual #{ritual_id}"
             )
             return None
@@ -1090,7 +1112,7 @@ class Operator(BaseActor):
             return async_tx
 
         if not self._is_handover_blinded_share_required(ritual_id=ritual_id):
-            self.log.debug(
+            self.log.info(
                 f"No action required for handover blinded share for ritual #{ritual_id}"
             )
             return None
@@ -1110,7 +1132,7 @@ class Operator(BaseActor):
             ritual_id=ritual_id,
             blinded_share=blinded_share,
         )
-        self.log.debug(
+        self.log.info(
             f"{self.transacting_power.account[:8]} created a handover blinded share for "
             f"DKG ritual #{ritual_id}."
         )

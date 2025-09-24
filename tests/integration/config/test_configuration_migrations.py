@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-import tests
 from nucypher.config.characters import UrsulaConfiguration
 from nucypher.config.migrations import MIGRATIONS
 from nucypher.config.migrations.common import WrongConfigurationVersion
@@ -11,7 +10,7 @@ from nucypher.config.migrations.common import WrongConfigurationVersion
 
 def _copy_config_file(src_test_file_name, dst_filepath):
     src_filepath = (
-        Path(tests.__file__).parent
+        Path(__file__).parent.parent.parent  # tests folder
         / "integration"
         / "config"
         / "data"
