@@ -15,13 +15,15 @@ def test_echo_nucypher_version(click_runner):
 
 @pytest.mark.parametrize("option", [("--help",), tuple()])
 def test_nucypher_help_message(click_runner, option):
-    entry_points = {command.name for command in ENTRY_POINTS}
     result = click_runner.invoke(nucypher_cli, option, catch_exceptions=False)
-    assert (
-        result.exit_code == 0 if option == "--help" else 2
-    )  # No args gives exit code 2
+    if len(option) == 0:
+        # No args gives exit code 2
+        assert result.exit_code == 2
+    else:
+        assert result.exit_code == 0
+
     assert "[OPTIONS] COMMAND [ARGS]" in result.output, result.output
-    assert all(e in result.output for e in entry_points), result.output
+    assert all(command.name in result.output for command in ENTRY_POINTS), result.output
 
 
 @pytest.mark.parametrize('entry_point_name, entry_point', ([command.name, command] for command in ENTRY_POINTS))
