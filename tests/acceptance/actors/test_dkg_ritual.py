@@ -128,7 +128,7 @@ def transaction_tracker(testerchain, coordinator_agent):
 
 @pytest.fixture(scope="module")
 def cohort(testerchain, clock, coordinator_agent, ursulas, dkg_size):
-    nodes = list(sorted(ursulas[:dkg_size], key=lambda x: int(x.checksum_address, 16)))
+    nodes = ursulas[:dkg_size]
     assert len(nodes) == dkg_size
     for node in nodes:
         node.ritual_tracker.task._task.clock = clock
@@ -170,7 +170,11 @@ def test_dkg_initiation(
     duration,
 ):
     print("==================== INITIALIZING ====================")
-    cohort_staking_provider_addresses = list(u.checksum_address for u in cohort)
+    # initiation requires sorted order (others don't)
+    cohort_staking_provider_addresses = list(
+        u.checksum_address
+        for u in sorted(cohort, key=lambda x: int(x.checksum_address, 16))
+    )
 
     # Approve the ritual token for the coordinator agent to spend
     amount = fee_model.getRitualCost(len(cohort_staking_provider_addresses), duration)
@@ -243,11 +247,12 @@ def test_transcript_publication(coordinator_agent, cohort, ritual_id, dkg_size):
 
 def test_get_participants(coordinator_agent, cohort, ritual_id, dkg_size):
     pagination_sizes = range(0, dkg_size)  # 0 means get all in one call
+    ordered_cohort = sorted(cohort, key=lambda x: int(x.checksum_address, 16))
     for page_size in pagination_sizes:
         with patch.object(coordinator_agent, "_get_page_size", return_value=page_size):
             ritual = coordinator_agent.get_ritual(ritual_id, transcripts=True)
             for i, participant in enumerate(ritual.participants):
-                assert participant.provider == cohort[i].checksum_address
+                assert participant.provider == ordered_cohort[i].checksum_address
                 assert participant.aggregated is True
                 assert participant.transcript
                 assert participant.decryption_request_static_key

@@ -14,8 +14,8 @@ from tests.constants import (
     INSECURE_DEVELOPMENT_PASSWORD,
     MOCK_ETH_PROVIDER_URI,
     MOCK_IP_ADDRESS,
+    OPERATOR_CHOICE,
     TEST_POLYGON_PROVIDER_URI,
-    YES_ENTER,
 )
 
 
@@ -44,9 +44,8 @@ def test_ursula_startup_ip_checkup(click_runner, mocker, temp_config_root):
         TEST_POLYGON_PROVIDER_URI,
         "--force",
     )
-    user_input = YES_ENTER + "0\n0\n"
     result = click_runner.invoke(
-        nucypher_cli, args, catch_exceptions=False, input=user_input
+        nucypher_cli, args, catch_exceptions=False, input=OPERATOR_CHOICE
     )
     assert result.exit_code == 0, result.output
     assert MOCK_IP_ADDRESS in result.output
@@ -64,7 +63,10 @@ def test_ursula_startup_ip_checkup(click_runner, mocker, temp_config_root):
         TEST_POLYGON_PROVIDER_URI,
     )
     result = click_runner.invoke(
-        nucypher_cli, args, catch_exceptions=False, input=FAKE_PASSWORD_CONFIRMED
+        nucypher_cli,
+        args,
+        catch_exceptions=False,
+        input=OPERATOR_CHOICE + FAKE_PASSWORD_CONFIRMED,
     )
     assert result.exit_code == 0, result.output
     shutil.rmtree(str(temp_config_root.absolute()))
@@ -83,7 +85,10 @@ def test_ursula_startup_ip_checkup(click_runner, mocker, temp_config_root):
         TEST_POLYGON_PROVIDER_URI,
     )
     result = click_runner.invoke(
-        nucypher_cli, args, catch_exceptions=True, input=FAKE_PASSWORD_CONFIRMED
+        nucypher_cli,
+        args,
+        catch_exceptions=True,
+        input=OPERATOR_CHOICE + FAKE_PASSWORD_CONFIRMED,
     )
     assert result.exit_code == 1, result.output
     assert isinstance(result.exception, UnknownIPAddress)
