@@ -2,7 +2,9 @@ import pytest
 from nucypher_core.ferveo import (
     AggregatedTranscript,
     Dkg,
+    InvalidTranscriptAggregate,
     Keypair,
+    Transcript,
     Validator,
     ValidatorMessage,
     combine_decryption_shares_simple,
@@ -31,9 +33,9 @@ def test_handover_with_encrypt_and_decrypt(
         for i, keypair in enumerate(validator_keypairs)
     ]
 
-    # Each validator holds their own DKG instance and generates a transcript every
-    # validator, including themselves
-    messages = []
+    # Each validator holds their own DKG instance and generates a transcript
+    # for each validator in the cohort, including themselves
+    validator_messages_bytes = []
     for sender in validators:
         dkg = Dkg(
             tau=tau,
@@ -42,7 +44,8 @@ def test_handover_with_encrypt_and_decrypt(
             validators=validators,
             me=sender,
         )
-        messages.append(ValidatorMessage(sender, dkg.generate_transcript()))
+        transcript = bytes(dkg.generate_transcript())
+        validator_messages_bytes.append([sender, transcript])
 
     # Now that every validator holds a dkg instance and a transcript for every other validator,
     # every validator can aggregate the transcripts
@@ -56,12 +59,37 @@ def test_handover_with_encrypt_and_decrypt(
     )
 
     # Server can aggregate the transcripts
+    messages = [
+        ValidatorMessage(a, Transcript.from_bytes(t))
+        for a, t in validator_messages_bytes
+    ]
     server_aggregate = dkg.aggregate_transcripts(messages)
     assert server_aggregate.verify(validators_num, messages)
 
     # And the client can also aggregate and verify the transcripts
     client_aggregate = AggregatedTranscript(messages)
     assert client_aggregate.verify(validators_num, messages)
+
+    # If transcripts are ill-formed, aggregation fails
+    bad_messages = validator_messages_bytes.copy()
+    valid_but_random_coefficient = bytes.fromhex(
+        "92b00f7796596e1790cb573e3c3c106d16882e3f688462800b7403e22d89feb7fe4784481baff3fb85698124d32a7e9d"
+    )
+    position = 16 + 48  # position of transcript.coefficients[1]
+    bad_messages[0][1] = (
+        bad_messages[0][1][:position]
+        + valid_but_random_coefficient
+        + bad_messages[0][1][position + 48 :]
+    )
+    bad_messages = [
+        ValidatorMessage(a, Transcript.from_bytes(t)) for a, t in bad_messages
+    ]
+
+    with pytest.raises(InvalidTranscriptAggregate):
+        bad_aggregate = dkg.aggregate_transcripts(
+            bad_messages
+        )  # TODO: should raise here
+        bad_aggregate.verify(validators_num, bad_messages)
 
     # In the meantime, the client creates a ciphertext and decryption request
     msg = "abc".encode()
