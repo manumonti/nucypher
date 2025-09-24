@@ -4,6 +4,29 @@ Releases
 
 .. towncrier release notes start
 
+v7.6.0 (2025-09-24)
+-------------------
+
+Features
+~~~~~~~~
+
+- Improve logging of handover operations. (`#3640 <https://github.com/nucypher/nucypher/issues/3640>`__)
+- Docker images are now based on the latest Debian Trixie (v13) release. (`#3648 <https://github.com/nucypher/nucypher/issues/3648>`__)
+- Drop support for Python 3.9 and Dependency Relock. (`#3649 <https://github.com/nucypher/nucypher/issues/3649>`__)
+
+
+Bugfixes
+~~~~~~~~
+
+- Fix issue with Alchemy's RPC free tier block restrictions that are hindering proper event scanning and processing. (`#3647 <https://github.com/nucypher/nucypher/issues/3647>`__)
+
+
+Internal Development Tasks
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- `#3650 <https://github.com/nucypher/nucypher/issues/3650>`__
+
+
 v7.6.0 (2025-08-18)
 -------------------
 

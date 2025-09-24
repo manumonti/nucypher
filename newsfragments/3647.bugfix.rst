@@ -1,1 +1,0 @@
-Fix issue with Alchemy's RPC free tier block restrictions that are hindering proper event scanning and processing.
